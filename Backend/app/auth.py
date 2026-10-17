@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 from typing import Any
 
 from fastapi import Header, HTTPException
@@ -22,6 +24,24 @@ class FirebaseConfigurationError(RuntimeError):
     pass
 
 
+def _firebase_credential() -> Any:
+    service_account_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON", "").strip()
+    if not service_account_json:
+        return credentials.ApplicationDefault()
+
+    try:
+        service_account_info = json.loads(service_account_json)
+    except (json.JSONDecodeError, TypeError):
+        raise FirebaseConfigurationError from None
+    if not isinstance(service_account_info, dict):
+        raise FirebaseConfigurationError
+
+    try:
+        return credentials.Certificate(service_account_info)
+    except (TypeError, ValueError):
+        raise FirebaseConfigurationError from None
+
+
 def _get_firebase_app() -> Any:
     if firebase_admin is None or firebase_auth is None or credentials is None or firebase_exceptions is None:
         raise FirebaseConfigurationError
@@ -30,7 +50,9 @@ def _get_firebase_app() -> Any:
         return firebase_admin.get_app()
     except ValueError:
         try:
-            return firebase_admin.initialize_app(credentials.ApplicationDefault())
+            return firebase_admin.initialize_app(_firebase_credential())
+        except FirebaseConfigurationError:
+            raise
         except (ValueError, OSError, getattr(google_auth_exceptions, "GoogleAuthError", OSError)) as exc:
             raise FirebaseConfigurationError from exc
 

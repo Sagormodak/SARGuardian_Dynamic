@@ -17,19 +17,89 @@ python -m pip install -r requirements.txt
 Copy-Item .env.example .env
 ```
 
+During local development, the backend loads `Backend/.env` through `python-dotenv`.
+Existing host environment variables take precedence. Set `APP_ENV=production` in a
+hosted environment; production skips local dotenv loading and requires hosting-provided
+environment variables, including an explicit `CORS_ORIGINS` value.
+
 Configure Firebase Admin with Application Default Credentials or a server-only
-`GOOGLE_APPLICATION_CREDENTIALS` path. Never place service-account credentials in `Frontend/`
+`GOOGLE_APPLICATION_CREDENTIALS` path. On Vercel, use the server-only
+`FIREBASE_SERVICE_ACCOUNT_JSON` environment variable instead; it contains the full JSON
+object supplied by the hosting environment and is parsed in memory. Do not commit its value,
+print it in logs, or place service-account credentials in `Frontend/`
 or any `VITE_*` variable. The frontend sends a Firebase ID token as `Authorization: Bearer ...`.
 Set `APP_ENV=production` and an explicit comma-separated `CORS_ORIGINS` allowlist in production;
 the server refuses to start in production without that allowlist. `PORT` is honored for hosting
 platforms and defaults to `8000` locally.
 
 For durable jobs, set `SUPABASE_URL` and the server-only `SUPABASE_SERVICE_ROLE_KEY`.
+That variable may contain either a modern opaque `sb_secret_...` key or a legacy
+`service_role` JWT. Modern keys are sent to Supabase as `apikey` and are never used
+as `Authorization: Bearer ...`; the Firebase ID token remains the separate client
+authentication credential.
 There is no in-memory fallback: missing values produce a safe configuration error. Apply
 `migrations/001_processing_jobs.sql` to the Supabase project before enabling job creation.
 Supabase does not automatically treat Firebase identities as Supabase Auth identities. The
 backend verifies Firebase first and filters every persistence operation by that verified UID;
 the SQL RLS policies are defense-in-depth for a future Supabase JWT integration.
+The manual, approval-gated staging procedure is documented in
+[`STAGING_MIGRATION_RUNBOOK.md`](STAGING_MIGRATION_RUNBOOK.md). It explicitly warns against
+selecting the old paused project and does not authorize this local environment to contact
+Supabase.
+
+## Safe local configuration preflight
+
+Do not commit `Backend/.env`. Create it manually from `Backend/.env.example` only after
+obtaining staging values. The current code expects these names:
+
+- `APP_ENV` (`development` locally; `production` on a host)
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY` (the server-only modern secret API key, or a legacy service-role JWT)
+- `GOOGLE_APPLICATION_CREDENTIALS` (local file path, optional when Application Default Credentials are configured)
+- `FIREBASE_SERVICE_ACCOUNT_JSON` (Vercel-only full JSON secret, parsed in memory)
+- `ASF_CATALOG_ENABLED`, `ASF_SEARCH_URL`, `ASF_MAX_RESULTS`, and `ASF_TIMEOUT_SECONDS`
+- `CORS_ORIGINS` (comma-separated origins; required in production)
+- `PREFLIGHT_TTL_SECONDS` (60 through 604800 seconds)
+- `PORT` (optional; defaults to 8000)
+
+Manual setup:
+
+1. Copy `Backend/.env.example` to `Backend/.env` locally; do not commit the copy.
+2. Set `APP_ENV=development` and the staging `SUPABASE_URL`.
+3. Put the modern server-only Supabase secret key in `SUPABASE_SERVICE_ROLE_KEY`.
+4. Set either `GOOGLE_APPLICATION_CREDENTIALS` to a local server-side credential path, or configure Application Default Credentials. Do not put the credential JSON in this repository.
+5. Set `ASF_CATALOG_ENABLED` deliberately, review `CORS_ORIGINS`, and keep `PREFLIGHT_TTL_SECONDS` within its supported range.
+6. From `Backend`, run the non-networking diagnostic:
+
+```powershell
+python -m app.config_diagnostic
+```
+
+The diagnostic reports only variable names and shape/status messages. It does not initialize
+Supabase or Firebase, contact ASF or Supabase, apply migrations, print values or key prefixes,
+or read the Firebase credential file. It exits with code 0 only when all checks pass. The
+Supabase secret is an API key for the server-side `apikey` header; it is not a Firebase token
+and is never the end-user `Authorization: Bearer` credential.
+
+## Vercel deployment preparation
+
+Create two Vercel projects from this repository without deploying from this phase:
+
+- Frontend project root: `Frontend/`
+- Backend project root: `Backend/`
+
+For the backend project, use the Python runtime with `index.py` as the FastAPI entrypoint.
+Vercel installs the backend dependencies from `Backend/requirements.txt`; no separate server
+or long-running process is required. Set `APP_ENV=production` and an explicit trusted
+comma-separated `CORS_ORIGINS` value containing the final Vercel frontend origin. Also set
+`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `FIREBASE_SERVICE_ACCOUNT_JSON` in Vercel's
+server-side environment settings. Do not set `GOOGLE_APPLICATION_CREDENTIALS` to a Windows
+path on Vercel. Keep Supabase migrations and worker dispatch as later phases.
+
+For the frontend project, use the Vite preset, root directory `Frontend/`, build command
+`npm run build`, and output directory `dist`. Set the public frontend variables documented in
+`Frontend/.env.example` before building. The existing `Frontend/vercel.json` provides the SPA
+rewrite for client-side routes such as `/landslide`.
 
 ## Run
 
