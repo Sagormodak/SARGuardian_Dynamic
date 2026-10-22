@@ -2148,7 +2148,10 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
                   <article className="investigation-mode-card archive-mode">
                     <span className="mode-icon" aria-hidden="true"><Icon name="layers" /></span>
                     <h3>Single Product Investigation</h3>
-                    <button className="investigate-button" type="button" disabled={!canSubmitCatalogPreflight(catalogValidation, isCatalogLoading)} onClick={() => void runCatalogPreflight()}>{isCatalogLoading ? 'Checking ASF...' : 'Explore NISAR Archive'}</button>
+                    <div className="catalog-family-actions" role="group" aria-label="Choose NISAR archive product family">
+                      <button className="investigate-button" type="button" disabled={!canSubmitCatalogPreflight(catalogValidation, isCatalogLoading)} onClick={() => void runCatalogPreflight('GUNW')}>{isCatalogLoading ? 'Checking ASF...' : 'Explore GUNW Archive'}</button>
+                      <button className="investigate-button" type="button" disabled={!canSubmitCatalogPreflight(catalogValidation, isCatalogLoading)} onClick={() => void runCatalogPreflight('GOFF')}>{isCatalogLoading ? 'Checking ASF...' : 'Explore GOFF Archive'}</button>
+                    </div>
                   </article>
                   <article className="investigation-mode-card displacement-mode">
                     <span className="mode-icon" aria-hidden="true"><Icon name="locate" /></span>

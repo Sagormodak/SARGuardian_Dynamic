@@ -53,7 +53,7 @@ def test_successful_search_builds_real_asf_query_and_maps_metadata(monkeypatch: 
     )
 
     query = parse_qs(urlparse(captured["url"]).query)
-    assert query["platform"] == ["NISAR"]
+    assert query["dataset"] == ["NISAR"]
     assert query["processingLevel"] == ["GUNW"]
     assert query["start"] == ["2026-08-01T00:00:00Z"]
     assert query["end"] == ["2026-08-15T23:59:59Z"]
@@ -65,6 +65,28 @@ def test_successful_search_builds_real_asf_query_and_maps_metadata(monkeypatch: 
     products, unknown, warnings = asf_catalog.normalize_product_rows(result.rows, "GUNW")
     assert products[0]["size_mb"] == 2
     assert products[0]["observation_dates"] == ["2026-08-01", "2026-08-13"]
+    assert unknown == 0
+    assert warnings == []
+
+
+def test_goff_search_uses_the_nisar_dataset_and_accepts_processing_level_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = {}
+    goff_row = sample_row("NISAR_L2_GOFF_TEST")
+    goff_row.pop("productType")
+    goff_row["processingLevel"] = "GOFF"
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        return FakeResponse({"results": [goff_row]})
+
+    monkeypatch.setattr(asf_catalog.urllib.request, "urlopen", fake_urlopen)
+    result = asf_catalog.search_asf_catalog([(85.3, 27.7), (85.301, 27.7), (85.301, 27.701)], date(2026, 9, 30), date(2026, 10, 22), "GOFF")
+    query = parse_qs(urlparse(captured["url"]).query)
+    products, unknown, warnings = asf_catalog.normalize_product_rows(result.rows, "GOFF")
+
+    assert query["dataset"] == ["NISAR"]
+    assert query["processingLevel"] == ["GOFF"]
+    assert products[0]["product_type"] == "GOFF"
     assert unknown == 0
     assert warnings == []
 
