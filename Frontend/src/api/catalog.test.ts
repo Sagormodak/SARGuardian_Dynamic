@@ -53,6 +53,17 @@ describe('NISAR catalogue preflight API contract', () => {
     }, user)).rejects.toThrow('Archive service unavailable.');
   });
 
+  it('uses the compact user-facing message when the archive cannot be reached', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network unavailable')));
+
+    await expect(searchNisarCatalog({
+      coordinates: [[85.3, 27.7], [85.301, 27.7], [85.301, 27.701], [85.3, 27.7]],
+      startDate: '2026-08-01',
+      endDate: '2026-08-15',
+      productType: 'GUNW',
+    }, user)).rejects.toThrow('Could not reach the NISAR archive. Check your connection or try again.');
+  });
+
   it('reports missing authentication and token failures without requesting the API', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);

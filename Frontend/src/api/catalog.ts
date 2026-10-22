@@ -102,7 +102,7 @@ export async function searchNisarCatalog(input: CatalogSearchRequest, user: Pick
       }),
     });
   } catch {
-    throw new Error('Could not reach the NISAR archive service. Check the API URL and network connection.');
+    throw new Error('Could not reach the NISAR archive. Check your connection or try again.');
   }
 
   const payload = await response.json().catch(() => ({})) as { detail?: string; message?: string };

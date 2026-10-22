@@ -2056,15 +2056,16 @@ export function LandslidePage({ user, onHome, onResults, onBackToMap, isResultsP
           <button type="button" aria-label="Fullscreen map" disabled={!mapReady} onClick={() => document.querySelector('.map-canvas-wrap')?.requestFullscreen()}><Icon name="fullscreen" /></button>
         </div>
 
-        {visibleError && (
-          <div id="catalog-validation-error" className="validation-toast" role="alert" aria-live="assertive">
-            <span className="validation-alert-icon" aria-hidden="true">!</span>
-            <span className="validation-toast-message">{visibleError}</span>
-            <button type="button" className="validation-toast-close" aria-label="Dismiss error" onClick={() => { setCatalogError(''); setError(''); setValidationAlertDismissed(true); }}>×</button>
-          </div>
-        )}
+        <div className="aoi-controls-stack">
+          {visibleError && (
+            <div id="catalog-validation-error" className="validation-toast" role="alert" aria-live="assertive">
+              <span className="validation-alert-icon" aria-hidden="true">!</span>
+              <span className="validation-toast-message">{visibleError}</span>
+              <button type="button" className="validation-toast-close" aria-label="Dismiss error" onClick={() => { setCatalogError(''); setError(''); setValidationAlertDismissed(true); }}>×</button>
+            </div>
+          )}
 
-        <section className="action-bar glass-float" aria-label="Investigation controls">
+          <section className="action-bar glass-float" aria-label="Investigation controls">
           {!result ? (
             <>
               {coordinates.length > 0 && (
@@ -2119,7 +2120,8 @@ export function LandslidePage({ user, onHome, onResults, onBackToMap, isResultsP
             <ResultPanel result={result} onReset={() => setResult(null)} />
           )}
 
-        </section>
+          </section>
+        </div>
       </main>
     </div>
   );

@@ -367,36 +367,6 @@
   font-weight: 700;
   line-height: 1.4;
 }
-.validation-alert {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: flex-start;
-  gap: 11px;
-  margin: 0;
-  padding: 12px 14px;
-  border: 1px solid rgba(190, 57, 67, .5);
-  border-left: 5px solid #c33a47;
-  border-radius: 8px;
-  background: rgba(255, 224, 226, .78);
-  color: #8f202d;
-  font-size: 15px;
-  font-weight: 700;
-  line-height: 1.4;
-  box-shadow: 0 8px 20px rgba(160, 42, 54, .12);
-}
-.validation-alert-icon {
-  display: grid;
-  flex: 0 0 auto;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: #c33a47;
-  color: #fff;
-  font-size: 15px;
-  font-weight: 800;
-  line-height: 1;
-}
 .reference-demo-notice { border-left-color: #d18a22; background: rgba(244, 183, 83, .14); color: #70440d; }
 .map-unavailable { border-color: rgba(104, 178, 218, .7); background: rgba(190, 228, 246, .82); color: var(--blue-900); }
 .map-unavailable small { color: #35637d; }
@@ -654,24 +624,6 @@
 .action-buttons { display: contents; }
 .action-buttons .investigate-button { grid-area: primary; align-self: end; width: 100%; }
 .action-buttons .demo-button { grid-area: secondary; align-self: end; width: 100%; }
-.validation-alert {
-  grid-area: validation;
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  margin: 0;
-  padding: 14px 16px;
-  border: 1px solid var(--ui-error-border);
-  border-left: 6px solid #ff465d;
-  border-radius: 8px;
-  background: var(--ui-error-bg);
-  color: var(--ui-error-text);
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 1.45;
-  box-shadow: 0 10px 24px rgba(50, 4, 16, .28);
-}
-.validation-alert-icon { width: 24px; height: 24px; background: #ff465d; color: #2b0711; font-size: 17px; }
 .catalog-error,
 .form-error {
   border-color: var(--ui-error-border);
@@ -749,7 +701,6 @@
   .date-range { width: 100%; }
   .action-buttons .investigate-button,
   .action-buttons .demo-button { width: 100%; }
-  .validation-alert { font-size: 16px; }
 }
 
 /* Dedicated NISAR results route: normal document flow, with no map-sized viewport trap. */
@@ -991,39 +942,6 @@
 .action-buttons .investigate-button { grid-area: primary; align-self: end; width: 132px; }
 .action-buttons .demo-button { grid-area: secondary; align-self: end; width: 112px; }
 
-.validation-toast {
-  position: absolute;
-  z-index: 10;
-  right: 24px;
-  bottom: 210px;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 9px;
-  width: min(500px, calc(100% - 48px));
-  padding: 12px 13px;
-  border: 1px solid #ff6474;
-  border-left: 4px solid #ff465d;
-  border-radius: 8px;
-  background: rgba(75, 15, 27, .94);
-  color: #fff2f3;
-  box-shadow: 0 14px 30px rgba(39, 4, 14, .34);
-}
-.validation-alert-icon { width: 21px; height: 21px; background: #ff465d; color: #360711; font-size: 15px; }
-.validation-toast-message { font-size: 15px; font-weight: 700; line-height: 1.38; }
-.validation-toast-close {
-  width: 26px;
-  height: 26px;
-  border: 1px solid rgba(255, 242, 243, .62);
-  border-radius: 50%;
-  background: rgba(255, 100, 116, .18);
-  color: #fff2f3;
-  cursor: pointer;
-  font-size: 20px;
-  line-height: 1;
-}
-.validation-toast-close:hover,
-.validation-toast-close:focus-visible { background: #ff465d; color: #360711; outline: 2px solid #fff2f3; outline-offset: 1px; }
 .catalog-error,
 .form-error { border-color: #ff6474; border-left-color: #ff465d; background: rgba(75, 15, 27, .94); color: #fff2f3; font-size: 14px; }
 
@@ -1038,7 +956,6 @@
   }
   .action-buttons .investigate-button,
   .action-buttons .demo-button { width: 100%; }
-  .validation-toast { bottom: 228px; }
 }
 
 @media (max-width: 640px) {
@@ -1060,5 +977,4 @@
   .time-actions { grid-template-columns: 1fr; gap: 6px; }
   .date-range { width: 100%; }
   .date-range input { width: 100%; }
-  .validation-toast { right: 8px; bottom: min(60vh, 430px); width: calc(100% - 16px); }
 }
