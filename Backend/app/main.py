@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import math
-import os
 import logging
+from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime
 from uuid import UUID, uuid4
 
@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 
 from .asf_catalog import ASFAdapterError, ASFAdapterNotConfigured, normalize_product_rows, search_asf_catalog
 from .auth import get_current_user
+from .config import SettingsError, get_settings, validate_production_settings
 from .jobs import CreateJobRequest, JobResponse, JobState
 from .models import CatalogResponse, CatalogSearchRequest
 from .persistence import (
@@ -31,15 +32,25 @@ ELIGIBILITY_UNDETERMINED_REASON = "Catalogue metadata alone does not establish s
 
 
 def _cors_origins() -> list[str]:
-    configured = os.getenv("CORS_ORIGINS", "")
-    if os.getenv("APP_ENV", "development").lower() == "production" and not configured.strip():
+    settings = get_settings()
+    configured = settings.cors_origins
+    if settings.app_env == "production" and not configured:
         raise RuntimeError("CORS_ORIGINS must be explicitly configured in production.")
     if not configured.strip():
         configured = "http://localhost:5173,http://127.0.0.1:5173"
     return [origin.strip() for origin in configured.split(",") if origin.strip()]
 
 
-app = FastAPI(title="SARGuardian Catalogue API", version="0.1.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    try:
+        validate_production_settings()
+    except SettingsError as exc:
+        raise RuntimeError(str(exc)) from None
+    yield
+
+
+app = FastAPI(title="SARGuardian Catalogue API", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
@@ -286,4 +297,4 @@ def get_job(job_id: UUID, user: dict = Depends(get_current_user)) -> JobResponse
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("app.main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
+    uvicorn.run("app.main:app", host="0.0.0.0", port=get_settings().port)

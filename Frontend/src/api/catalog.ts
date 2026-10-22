@@ -55,6 +55,23 @@ export type CatalogSearchRequest = {
   productType: NisarProductType;
 };
 
+export type ProcessingJobState = 'queued' | 'dispatching' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+
+export type ProcessingJob = {
+  id: string;
+  owner_uid: string;
+  preflight_id: string;
+  product_family: NisarProductType;
+  state: ProcessingJobState;
+  request_snapshot: Record<string, unknown>;
+  manifest_snapshot: Record<string, unknown>;
+  worker_run_id?: string | null;
+  error_code?: string | null;
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 const configuredApiUrl = (import.meta.env.VITE_SARGUARDIAN_API_URL as string | undefined)?.trim();
 const API_BASE = (configuredApiUrl || 'http://localhost:8000').replace(/\/+$/, '');
 
@@ -85,7 +102,7 @@ export async function searchNisarCatalog(input: CatalogSearchRequest, user: Pick
       }),
     });
   } catch {
-    throw new Error('Could not reach the NISAR archive service. Check the API URL and network connection.');
+    throw new Error('Could not reach the NISAR archive. Check your connection or try again.');
   }
 
   const payload = await response.json().catch(() => ({})) as { detail?: string; message?: string };
@@ -93,6 +110,74 @@ export async function searchNisarCatalog(input: CatalogSearchRequest, user: Pick
     throw new Error(payload.detail || payload.message || `Catalogue request failed (${response.status}).`);
   }
   return payload as CatalogResponse;
+}
+
+async function getFirebaseIdToken(user: Pick<User, 'getIdToken'> | null): Promise<string> {
+  if (!user) throw new Error('Sign in before submitting a processing job.');
+  try {
+    const token = await user.getIdToken();
+    if (!token) throw new Error('empty token');
+    return token;
+  } catch {
+    throw new Error('Could not obtain your Firebase sign-in token. Sign in again and retry.');
+  }
+}
+
+async function readAuthenticatedPayload<T>(
+  url: string,
+  user: Pick<User, 'getIdToken'> | null,
+  fallback: string,
+  init?: RequestInit,
+): Promise<T> {
+  const token = await getFirebaseIdToken(user);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(init?.headers || {}),
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  } catch {
+    throw new Error(`Could not reach the processing service. ${fallback}`);
+  }
+  return readApiPayload<T>(response, fallback);
+}
+
+export async function createQueuedJob(
+  preflightId: string,
+  idempotencyKey: string,
+  user: Pick<User, 'getIdToken'> | null,
+): Promise<ProcessingJob> {
+  return readAuthenticatedPayload<ProcessingJob>(
+    `${API_BASE}/api/jobs`,
+    user,
+    'Could not create the queued job.',
+    {
+      method: 'POST',
+      body: JSON.stringify({ preflight_id: preflightId, idempotency_key: idempotencyKey, confirm: true }),
+    },
+  );
+}
+
+export async function listProcessingJobs(user: Pick<User, 'getIdToken'> | null): Promise<ProcessingJob[]> {
+  return readAuthenticatedPayload<ProcessingJob[]>(
+    `${API_BASE}/api/jobs`,
+    user,
+    'Could not load your processing jobs.',
+  );
+}
+
+export async function getProcessingJob(jobId: string, user: Pick<User, 'getIdToken'> | null): Promise<ProcessingJob> {
+  const safeId = jobId.trim();
+  if (!safeId) throw new Error('A processing job ID is required.');
+  return readAuthenticatedPayload<ProcessingJob>(
+    `${API_BASE}/api/jobs/${encodeURIComponent(safeId)}`,
+    user,
+    'Could not load the selected processing job.',
+  );
 }
 
 

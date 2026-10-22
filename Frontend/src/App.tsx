@@ -1,25 +1,32 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 import type { Engine } from './data/engineData';
 import { Home } from './pages/Home';
 import { LandslidePage } from '../landslide/ui/LandslidePage';
 import { auth, firebaseConfigured, googleProvider, missingFirebaseConfig } from './firebase';
+import { isLandslideResultsRoute, isLandslideRoute, LANDSLIDE_PATH, LANDSLIDE_RESULTS_PATH, navigatePath, normalizePathname } from './routing';
 
 function App() {
-  const [pathname, setPathname] = useState(window.location.pathname);
+  const [pathname, setPathname] = useState(() => normalizePathname(window.location.pathname));
+  const pathnameRef = useRef(pathname);
   const [user, setUser] = useState<User | null>(null);
   const [authState, setAuthState] = useState<'idle' | 'loading' | 'ready' | 'error'>('loading');
   const [authError, setAuthError] = useState<string | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [pendingRoute, setPendingRoute] = useState<string | null>(null);
 
-  const navigateTo = (nextPath: string) => {
-    window.history.pushState({}, '', nextPath);
-    setPathname(nextPath);
-  };
+  const navigateTo = useCallback((nextPath: string) => {
+    const normalizedPath = navigatePath(nextPath, window.location.pathname, window.history.pushState.bind(window.history));
+    pathnameRef.current = normalizedPath;
+    setPathname(normalizedPath);
+  }, []);
 
   useEffect(() => {
-    const handlePopState = () => setPathname(window.location.pathname);
+    const handlePopState = () => {
+      const nextPath = normalizePathname(window.location.pathname);
+      pathnameRef.current = nextPath;
+      setPathname(nextPath);
+    };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
@@ -34,8 +41,9 @@ function App() {
       setUser(currentUser);
       setAuthState(currentUser ? 'ready' : 'idle');
       setAuthError(null);
-      if (!currentUser && pathname === '/landslide') {
-        setPendingRoute('/landslide');
+      const currentPath = pathnameRef.current;
+      if (!currentUser && isLandslideRoute(currentPath)) {
+        setPendingRoute(currentPath);
         setAuthModalOpen(true);
         navigateTo('/');
       }
@@ -43,7 +51,7 @@ function App() {
       setAuthError(error.message);
       setAuthState('error');
     });
-  }, [pathname]);
+  }, [navigateTo]);
 
   const handleSignIn = async () => {
     if (!auth || !googleProvider) {
@@ -101,7 +109,7 @@ function App() {
     setAuthModalOpen(false);
   };
 
-  if (pathname === '/landslide' || pathname.startsWith('/landslide/')) {
+  if (isLandslideRoute(pathname)) {
     if (!user) {
       return (
         <Home
@@ -121,8 +129,12 @@ function App() {
 
     return (
       <LandslidePage
+        key={user.uid}
         user={user}
         onHome={() => navigateTo('/')}
+        isResultsPage={isLandslideResultsRoute(pathname)}
+        onResults={() => navigateTo(LANDSLIDE_RESULTS_PATH)}
+        onBackToMap={() => navigateTo(LANDSLIDE_PATH)}
         onSignOut={handleSignOut}
       />
     );
