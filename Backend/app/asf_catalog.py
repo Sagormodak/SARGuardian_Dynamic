@@ -115,7 +115,8 @@ def normalize_product_rows(rows: list[dict[str, Any]], product_type: str) -> tup
     for row in rows:
         granule_name = row.get("granuleName")
         actual_type = row.get("productType") or row.get("processingLevel")
-        if not isinstance(granule_name, str) or not granule_name or actual_type != product_type:
+        requested_types = set(product_type.split(","))
+        if not isinstance(granule_name, str) or not granule_name or actual_type not in requested_types:
             warnings.append("ASF returned a product record with incomplete or mismatched metadata; it was omitted.")
             continue
         size_mb = _size_mb(row)

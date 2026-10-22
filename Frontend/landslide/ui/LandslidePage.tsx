@@ -325,7 +325,8 @@ function CatalogPreflightPanel({
       ) : (
         <div className="catalog-product-list">
           {result.products.map((product, index) => {
-            const isExtractableGunw = result.query.product_type === 'GUNW'
+            const isExtractableGunw = result.query.product_type !== 'BOTH'
+              && product.product_type === 'GUNW'
               && /^NISAR_L2_(PR|UR)_GUNW_[A-Za-z0-9_]+$/.test(product.granule_name);
             const isSelected = product.granule_name === selectedGranuleName;
             return (
@@ -1960,23 +1961,25 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
             onAnalyzeQuality={runQualityAnalysis}
           />
         )}
-        <QueuedJobPanel
-          result={catalogResult}
-          confirmSubmission={confirmQueuedJob}
-          onConfirmSubmissionChange={setConfirmQueuedJob}
-          isSubmitting={isCreatingQueuedJob}
-          error={queuedJobError}
-          message={queuedJobMessage}
-          job={queuedJob}
-          jobs={processingJobs}
-          isLoadingJobs={isLoadingProcessingJobs}
-          selectedJob={selectedProcessingJob}
-          isLoadingDetail={isLoadingProcessingJobDetail}
-          onCreate={createConfirmedJob}
-          onRefresh={refreshProcessingJobs}
-          onInspect={inspectProcessingJob}
-        />
-        <ProcessingUnavailablePanel />
+        {catalogResult.query.product_type !== 'BOTH' && <>
+          <QueuedJobPanel
+            result={catalogResult}
+            confirmSubmission={confirmQueuedJob}
+            onConfirmSubmissionChange={setConfirmQueuedJob}
+            isSubmitting={isCreatingQueuedJob}
+            error={queuedJobError}
+            message={queuedJobMessage}
+            job={queuedJob}
+            jobs={processingJobs}
+            isLoadingJobs={isLoadingProcessingJobs}
+            selectedJob={selectedProcessingJob}
+            isLoadingDetail={isLoadingProcessingJobDetail}
+            onCreate={createConfirmedJob}
+            onRefresh={refreshProcessingJobs}
+            onInspect={inspectProcessingJob}
+          />
+          <ProcessingUnavailablePanel />
+        </>}
       </>
     );
   };
@@ -2002,7 +2005,7 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
                 </div>
                 <div className="catalog-family-toggle" role="group" aria-label="NISAR product family">
                   <span>Product family</span>
-                  {(['GUNW', 'GOFF'] as const).map((family) => (
+                  {(['GUNW', 'GOFF', 'BOTH'] as const).map((family) => (
                     <button
                       key={family}
                       type="button"
@@ -2010,7 +2013,7 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
                       disabled={isCatalogLoading}
                       onClick={() => switchCatalogProductType(family)}
                     >
-                      {isCatalogLoading && productType !== family ? `Loading ${family}…` : family}
+                      {isCatalogLoading && productType !== family ? `Loading ${family}…` : family === 'BOTH' ? 'Both' : family}
                     </button>
                   ))}
                 </div>
@@ -2148,10 +2151,7 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
                   <article className="investigation-mode-card archive-mode">
                     <span className="mode-icon" aria-hidden="true"><Icon name="layers" /></span>
                     <h3>Single Product Investigation</h3>
-                    <div className="catalog-family-actions" role="group" aria-label="Choose NISAR archive product family">
-                      <button className="investigate-button" type="button" disabled={!canSubmitCatalogPreflight(catalogValidation, isCatalogLoading)} onClick={() => void runCatalogPreflight('GUNW')}>{isCatalogLoading ? 'Checking ASF...' : 'Explore GUNW Archive'}</button>
-                      <button className="investigate-button" type="button" disabled={!canSubmitCatalogPreflight(catalogValidation, isCatalogLoading)} onClick={() => void runCatalogPreflight('GOFF')}>{isCatalogLoading ? 'Checking ASF...' : 'Explore GOFF Archive'}</button>
-                    </div>
+                    <button className="investigate-button" type="button" disabled={!canSubmitCatalogPreflight(catalogValidation, isCatalogLoading)} onClick={() => void runCatalogPreflight()}>{isCatalogLoading ? 'Checking ASF...' : 'Explore NISAR Archive'}</button>
                   </article>
                   <article className="investigation-mode-card displacement-mode">
                     <span className="mode-icon" aria-hidden="true"><Icon name="locate" /></span>

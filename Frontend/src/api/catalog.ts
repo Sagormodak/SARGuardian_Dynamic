@@ -1,7 +1,7 @@
 import type { User } from 'firebase/auth';
 import type { Coordinate } from '../../landslide/engine/types';
 
-export type NisarProductType = 'GUNW' | 'GOFF';
+export type NisarProductType = 'GUNW' | 'GOFF' | 'BOTH';
 
 export type CatalogProduct = {
   granule_name: string;
@@ -77,7 +77,7 @@ const API_BASE = (configuredApiUrl || 'http://localhost:8000').replace(/\/+$/, '
 
 export async function searchNisarCatalog(input: CatalogSearchRequest, user: Pick<User, 'getIdToken'> | null): Promise<CatalogResponse> {
   if (!user) throw new Error('Sign in before checking the NISAR archive.');
-  if (input.productType !== 'GUNW' && input.productType !== 'GOFF') {
+  if (input.productType !== 'GUNW' && input.productType !== 'GOFF' && input.productType !== 'BOTH') {
     throw new Error('Unsupported NISAR data family.');
   }
 

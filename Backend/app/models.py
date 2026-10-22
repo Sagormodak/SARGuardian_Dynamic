@@ -6,7 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-NisarProductType = Literal["GUNW", "GOFF"]
+NisarProductType = Literal["GUNW", "GOFF", "BOTH"]
 
 
 class CatalogSearchRequest(BaseModel):

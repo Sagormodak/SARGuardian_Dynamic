@@ -116,6 +116,26 @@ def test_catalog_response_contract_maps_ready_metadata_without_downloading(monke
     assert body["processing_eligibility"]["status"] == "undetermined"
 
 
+def test_catalog_both_family_combines_gunw_and_goff_without_creating_a_processing_preflight(monkeypatch) -> None:
+    captured = {}
+
+    def search(*args):
+        captured["product_types"] = args[-1]
+        return ASFSearchResult(rows=[
+            {"granuleName": "NISAR_L2_GUNW_TEST", "productType": "GUNW", "startTime": "2026-08-01T00:00:00Z"},
+            {"granuleName": "NISAR_L2_GOFF_TEST", "productType": "GOFF", "startTime": "2026-08-02T00:00:00Z"},
+        ], truncated=False, query_url="https://example.invalid")
+
+    monkeypatch.setattr(main_module, "search_asf_catalog", search)
+    response = authenticated_client().post("/api/catalog/search", json=valid_payload() | {"product_type": "BOTH"})
+
+    assert response.status_code == 200
+    assert captured["product_types"] == "GUNW,GOFF"
+    assert response.json()["query"]["product_type"] == "BOTH"
+    assert {product["product_type"] for product in response.json()["products"]} == {"GUNW", "GOFF"}
+    assert response.json()["preflight_id"] is None
+
+
 def test_catalog_upstream_failure_is_not_reported_as_no_data(monkeypatch) -> None:
     def fail(*args):
         raise ASFAdapterError("ASF catalogue request timed out or could not be reached.")

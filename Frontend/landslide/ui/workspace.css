@@ -140,8 +140,6 @@
 .investigation-mode-card .mode-icon { color: var(--sg-accent); }
 .mode-icon svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.6; }
 .landslide-route-shell .investigation-mode-card .investigate-button { grid-column: 1 / -1; grid-row: auto; width: 100%; align-self: end; margin-top: 1px; white-space: normal; }
-.landslide-route-shell .catalog-family-actions { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 1px; }
-.landslide-route-shell .catalog-family-actions .investigate-button { width: 100%; margin-top: 0; }
 .investigation-mode-card:focus-within { border-color: var(--sg-accent); }
 .preparation-dates { display: flex; flex-wrap: wrap; gap: 32px; margin-top: 24px; }
 .preparation-dates dt { color: var(--sg-muted); font-size: 12px; }

@@ -149,8 +149,9 @@ def search_catalog(request: CatalogSearchRequest, _user: dict = Depends(get_curr
         "end_date": request.end_date,
         "aoi_area_km2": area,
     }
+    requested_product_types = "GUNW,GOFF" if request.product_type == "BOTH" else request.product_type
     try:
-        result = search_asf_catalog(coordinates, request.start_date, request.end_date, request.product_type)
+        result = search_asf_catalog(coordinates, request.start_date, request.end_date, requested_product_types)
     except ASFAdapterNotConfigured:
         return CatalogResponse(
             status="not_configured",
@@ -164,7 +165,7 @@ def search_catalog(request: CatalogSearchRequest, _user: dict = Depends(get_curr
     except ASFAdapterError as exc:
         return JSONResponse(status_code=502, content={"status": "upstream_error", "message": str(exc)})
 
-    products, unknown_size, metadata_warnings = normalize_product_rows(result.rows, request.product_type)
+    products, unknown_size, metadata_warnings = normalize_product_rows(result.rows, requested_product_types)
     total_gib = sum(product["size_mb"] or 0 for product in products) / 1024
     warnings = [*metadata_warnings]
     if result.truncated:
@@ -194,7 +195,7 @@ def search_catalog(request: CatalogSearchRequest, _user: dict = Depends(get_curr
         next_step=next_step,
         warnings=[*warnings, "Metadata preflight only: no satellite files were downloaded and no scientific movement analysis was performed."],
     )
-    if status != "ready":
+    if status != "ready" or request.product_type == "BOTH":
         return response
 
     try:

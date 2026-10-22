@@ -56,6 +56,24 @@ describe('NISAR catalogue preflight API contract', () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body as string).product_type).toBe('GOFF');
   });
 
+  it('requests both GUNW and GOFF metadata when the Both archive control is selected', async () => {
+    const response = {
+      mode: 'catalog-preflight-only', checked_at: '2026-10-15T00:00:00Z', data_downloaded: false, scientific_analysis_performed: false,
+      query: { platform: 'NISAR', product_type: 'BOTH', start_date: '2026-08-01', end_date: '2026-08-15', aoi_area_km2: 1 },
+      product_count: 0, truncated: false, products_with_unknown_size: 0, estimated_full_granule_volume_gib: 0,
+      estimated_full_granule_volume_is_complete: true, products: [], next_step: 'none', warnings: [],
+    };
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => response });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await searchNisarCatalog({
+      coordinates: [[85.3, 27.7], [85.301, 27.7], [85.301, 27.701], [85.3, 27.7]],
+      startDate: '2026-08-01', endDate: '2026-08-15', productType: 'BOTH',
+    }, user);
+
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string).product_type).toBe('BOTH');
+  });
+
   it('surfaces an archive API failure to the caller', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: false,

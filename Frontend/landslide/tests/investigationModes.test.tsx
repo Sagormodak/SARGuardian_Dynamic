@@ -23,8 +23,7 @@ describe('investigation mode state integration', () => {
     const cards = map.match(/<article class="investigation-mode-card[\s\S]*?<\/article>/g)!;
     expect(cards).toHaveLength(2);
     for (const card of cards) expect(card).not.toContain('disabled=""');
-    expect(cards[0]).toContain('Explore GUNW Archive');
-    expect(cards[0]).toContain('Explore GOFF Archive');
+    expect(cards[0]).toContain('Explore NISAR Archive');
     expect(cards[1]).toContain('Find Displacements');
     expect(cards[0]).not.toContain('Explore available NISAR products for your selected area and time window.');
     expect(cards[1]).not.toContain('Prepare your selected AOI and time window for displacement analysis.');

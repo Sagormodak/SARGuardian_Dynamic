@@ -80,7 +80,7 @@ function isCatalogResponse(value: unknown): value is CatalogResponse {
   if (!isRecord(value.processing_eligibility) || value.processing_eligibility.status !== 'undetermined' || typeof value.processing_eligibility.reason !== 'string') return false;
   if (!isRecord(value.query)
     || typeof value.query.platform !== 'string'
-    || (value.query.product_type !== 'GUNW' && value.query.product_type !== 'GOFF')
+    || (value.query.product_type !== 'GUNW' && value.query.product_type !== 'GOFF' && value.query.product_type !== 'BOTH')
     || typeof value.query.start_date !== 'string'
     || typeof value.query.end_date !== 'string'
     || typeof value.query.aoi_area_km2 !== 'number'
