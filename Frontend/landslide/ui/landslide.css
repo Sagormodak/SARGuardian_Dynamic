@@ -620,7 +620,7 @@
 .time-actions {
   grid-area: time;
   display: grid;
-  grid-template-columns: auto minmax(220px, 1fr) minmax(180px, auto);
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 12px;
   min-width: 0;

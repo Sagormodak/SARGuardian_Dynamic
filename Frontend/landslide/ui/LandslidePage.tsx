@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { importLibrary, setOptions } from '@googlemaps/js-api-loader';
 import type { User } from 'firebase/auth';
 import { analyzeGunwAoiQuality, createQueuedJob, getNisarHarmonyJobStatus, getProcessingJob, inspectNisarAoiWindow, listProcessingJobs, searchNisarCatalog, startGunwQualityLayers, startNisarHarmonyLayerJob, verifyGunwNativeSourceMask } from '../../src/api/catalog';
-import type { AoiWindowResponse, CatalogProduct, CatalogResponse, GunwQualityAnalysisResponse, HarmonyLayerRole, HarmonyQualityLayerBundle, HarmonyQualityLayerJob, NativeSourceMaskVerificationResponse, NisarProductType, ProcessingJob, SubmittedHarmonyLayerJob } from '../../src/api/catalog';
+import type { AoiWindowResponse, CatalogProduct, CatalogResponse, GunwQualityAnalysisResponse, HarmonyLayerRole, HarmonyQualityLayerBundle, HarmonyQualityLayerJob, NativeSourceMaskVerificationResponse, ProcessingJob, SubmittedHarmonyLayerJob } from '../../src/api/catalog';
 import { calculateGeodesicAreaKm2, canSubmitCatalogPreflight, validateCatalogPreflight, validatePolyline } from '../engine/validation';
 import { scheduleErrorToastDismissal } from './errorToast';
 import { createAoiOverlayController } from './mapOverlays';
@@ -1027,7 +1027,7 @@ export function LandslidePage({ user, onHome, onResults, onBackToMap, isResultsP
   const mapTypeListenerRef = useRef<google.maps.MapsEventListener | null>(null);
   const [profileImageFailed, setProfileImageFailed] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
-  const [productType, setProductType] = useState<NisarProductType>(initialSessionState.productType);
+  const productType = 'GUNW' as const;
   const [catalogResult, setCatalogResult] = useState<CatalogResponse | null>(initialSessionState.catalogResult);
   const [isCatalogLoading, setIsCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState('');
@@ -1113,11 +1113,10 @@ export function LandslidePage({ user, onHome, onResults, onBackToMap, isResultsP
       drawing,
       windowStart,
       windowEnd,
-      productType,
       catalogResult,
       selectedHarmonyProduct,
     });
-  }, [areaClosed, catalogResult, coordinates, drawing, location, productType, searchState, searchText, selectedHarmonyProduct, user.uid, windowEnd, windowStart]);
+  }, [areaClosed, catalogResult, coordinates, drawing, location, searchState, searchText, selectedHarmonyProduct, user.uid, windowEnd, windowStart]);
 
   useEffect(() => {
     setProfileImageFailed(false);
@@ -1905,7 +1904,7 @@ export function LandslidePage({ user, onHome, onResults, onBackToMap, isResultsP
             onUseAsMask={useSubmittedJobAsMask}
           />
         )}
-        {HARMONY_UI_ENABLED && productType === 'GUNW' && (
+        {HARMONY_UI_ENABLED && (
           <AoiWindowPanel
             coordinates={coordinates}
             areaClosed={areaClosed}
@@ -1968,7 +1967,7 @@ export function LandslidePage({ user, onHome, onResults, onBackToMap, isResultsP
             <section className="nisar-results-empty glass-float" aria-live="polite">
               <span className="result-kicker">NISAR CATALOGUE</span>
               <h1>No catalogue results are loaded</h1>
-              <p>Open the map, draw a valid AOI, choose a date range and product family, then run the archive check.</p>
+              <p>Open the map, draw a valid AOI, choose a date range, then run the archive check.</p>
               <button className="investigate-button" type="button" onClick={onBackToMap}>Back to map</button>
             </section>
           ) : (
@@ -2057,6 +2056,14 @@ export function LandslidePage({ user, onHome, onResults, onBackToMap, isResultsP
           <button type="button" aria-label="Fullscreen map" disabled={!mapReady} onClick={() => document.querySelector('.map-canvas-wrap')?.requestFullscreen()}><Icon name="fullscreen" /></button>
         </div>
 
+        {visibleError && (
+          <div id="catalog-validation-error" className="validation-toast" role="alert" aria-live="assertive">
+            <span className="validation-alert-icon" aria-hidden="true">!</span>
+            <span className="validation-toast-message">{visibleError}</span>
+            <button type="button" className="validation-toast-close" aria-label="Dismiss error" onClick={() => { setCatalogError(''); setError(''); setValidationAlertDismissed(true); }}>×</button>
+          </div>
+        )}
+
         <section className="action-bar glass-float" aria-label="Investigation controls">
           {!result ? (
             <>
@@ -2096,13 +2103,6 @@ export function LandslidePage({ user, onHome, onResults, onBackToMap, isResultsP
                   <span>to</span>
                   <input type="date" value={windowEnd} min={windowStart || undefined} max={today} onChange={(event) => handleWindowEndChange(event.target.value)} aria-label="Ending date" />
                 </div>
-                <label className="dataset-selector">
-                  <span>Data family</span>
-                  <select value={productType} onChange={(event) => { setProductType(event.target.value as NisarProductType); setCatalogResult(null); setCatalogError(''); setSelectedHarmonyProduct(null); setConfirmFullGranuleLayer(false); setAoiWindowResult(null); setAoiWindowError(''); setQualityBundle(null); setQualityStatuses({}); setQualityAnalysis(null); setHarmonyJobId(''); setQualityGranuleName(''); setSourceMaskJobId(''); setSourceMaskVerification(null); }} aria-label="NISAR product family">
-                    <option value="GUNW">GUNW · interferometry</option>
-                    <option value="GOFF">GOFF · pixel offsets</option>
-                  </select>
-                </label>
               </div>
 
               <div className="action-buttons">
@@ -2120,13 +2120,6 @@ export function LandslidePage({ user, onHome, onResults, onBackToMap, isResultsP
           )}
 
         </section>
-        {visibleError && (
-          <div id="catalog-validation-error" className="validation-toast" role="alert" aria-live="assertive">
-            <span className="validation-alert-icon" aria-hidden="true">!</span>
-            <span className="validation-toast-message">{visibleError}</span>
-            <button type="button" className="validation-toast-close" aria-label="Dismiss error" onClick={() => { setCatalogError(''); setError(''); setValidationAlertDismissed(true); }}>×</button>
-          </div>
-        )}
       </main>
     </div>
   );

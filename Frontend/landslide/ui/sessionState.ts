@@ -1,4 +1,4 @@
-import type { CatalogProduct, CatalogResponse, NisarProductType } from '../../src/api/catalog';
+import type { CatalogProduct, CatalogResponse } from '../../src/api/catalog';
 import type { Coordinate, LocationSelection } from '../engine/types';
 
 const STORAGE_KEY_PREFIX = 'sarguardian.landslide.session.v1';
@@ -12,7 +12,6 @@ export type LandslideSessionState = {
   drawing: boolean;
   windowStart: string;
   windowEnd: string;
-  productType: NisarProductType;
   catalogResult: CatalogResponse | null;
   selectedHarmonyProduct: CatalogProduct | null;
 };
@@ -27,7 +26,6 @@ function emptyState(): LandslideSessionState {
     drawing: false,
     windowStart: '',
     windowEnd: '',
-    productType: 'GUNW',
     catalogResult: null,
     selectedHarmonyProduct: null,
   };
@@ -136,7 +134,6 @@ export function loadLandslideSessionState(uid: string): LandslideSessionState {
       drawing: typeof parsed.drawing === 'boolean' ? parsed.drawing : false,
       windowStart: isDate(parsed.windowStart) ? parsed.windowStart : fallback.windowStart,
       windowEnd: isDate(parsed.windowEnd) ? parsed.windowEnd : fallback.windowEnd,
-      productType: parsed.productType === 'GOFF' ? 'GOFF' : 'GUNW',
       catalogResult,
       selectedHarmonyProduct: selectedHarmonyProduct && catalogResult
         ? catalogResult.products.find((product) => product.granule_name === selectedHarmonyProduct.granule_name) ?? null
@@ -149,8 +146,8 @@ export function loadLandslideSessionState(uid: string): LandslideSessionState {
 
 export function persistLandslideSessionState(uid: string, state: LandslideSessionState): void {
   try {
-    const { searchText, searchState, location, coordinates, areaClosed, drawing, windowStart, windowEnd, productType, catalogResult, selectedHarmonyProduct } = state;
-    window.sessionStorage.setItem(storageKey(uid), JSON.stringify({ searchText, searchState, location, coordinates, areaClosed, drawing, windowStart, windowEnd, productType, catalogResult, selectedHarmonyProduct }));
+    const { searchText, searchState, location, coordinates, areaClosed, drawing, windowStart, windowEnd, catalogResult, selectedHarmonyProduct } = state;
+    window.sessionStorage.setItem(storageKey(uid), JSON.stringify({ searchText, searchState, location, coordinates, areaClosed, drawing, windowStart, windowEnd, catalogResult, selectedHarmonyProduct }));
   } catch {
     // Session storage is optional; the mounted LandslidePage remains the primary route state.
   }

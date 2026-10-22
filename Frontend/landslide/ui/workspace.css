@@ -132,7 +132,7 @@
 .landslide-route-shell .demo-button { min-height: 40px; border-color: var(--sg-border); border-radius: 9px; background: var(--sg-control); font-size: 12px; }
 .landslide-route-shell .draw-actions button.active,
 .landslide-route-shell .draw-actions .confirm-button { border-color: rgba(72, 225, 220, .65); color: var(--sg-accent); background: rgba(35, 141, 153, .16); }
-.landslide-route-shell .time-actions { grid-template-columns: auto minmax(210px, 1fr) minmax(150px, .8fr); gap: 12px; padding: 0; border: 0; }
+.landslide-route-shell .time-actions { grid-template-columns: auto minmax(0, 1fr); gap: 12px; padding: 0; border: 0; }
 .landslide-route-shell .time-actions > span { font-size: 11px; color: var(--sg-muted); letter-spacing: 0; }
 .landslide-route-shell .date-range { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 7px; }
 .landslide-route-shell .date-range input { width: 100%; min-width: 0; padding: 0 7px; min-height: 40px; color: var(--sg-text); background: var(--sg-control); border-color: var(--sg-border); font-size: 12px; }
@@ -142,8 +142,19 @@
 .landslide-route-shell .action-buttons { display: contents; }
 .landslide-route-shell .action-buttons .investigate-button { min-width: 0; width: 100%; }
 .landslide-route-shell .catalog-map-result-link { min-width: 0; flex-wrap: wrap; border-color: var(--sg-border); background: var(--sg-control); }
-.landslide-route-shell .validation-toast { bottom: auto; top: 130px; right: 80px; width: min(450px, calc(100% - 110px)); font-size: 13px; }
-.landslide-route-shell .validation-toast-message { font-size: 13px; }
+.landslide-route-shell .validation-toast {
+  top: 92px;
+  right: 20px;
+  width: min(420px, calc(100% - 40px));
+  padding: 8px 10px;
+  gap: 8px;
+  border-left-width: 3px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.landslide-route-shell .validation-alert-icon { width: 18px; height: 18px; font-size: 12px; }
+.landslide-route-shell .validation-toast-message { min-width: 0; font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.landslide-route-shell .validation-toast-close { width: 22px; height: 22px; font-size: 16px; flex: 0 0 auto; }
 .landslide-route-shell .nisar-results-page { background: linear-gradient(150deg, var(--sg-navy), var(--sg-deep)); overflow: visible; }
 .landslide-route-shell .nisar-results-main { width: min(1180px, calc(100% - 40px)); padding: 28px 0 56px; }
 .landslide-route-shell .nisar-results-summary,
@@ -177,13 +188,13 @@
 /* On phones and short screens, controls follow the map in document flow. */
 @media (max-width: 760px), (max-height: 620px) {
   .landslide-route-shell .landslide-page { height: auto; min-height: 100dvh; overflow: visible; }
-  .landslide-route-shell .map-main { height: auto; display: grid; grid-template-areas: 'map' 'controls' 'feedback'; grid-template-rows: minmax(340px, 56svh) auto auto; gap: 0; padding-bottom: 20px; }
+  .landslide-route-shell .map-main { height: auto; display: grid; grid-template-areas: 'map' 'feedback' 'controls'; grid-template-rows: minmax(340px, 56svh) auto auto; gap: 0; padding-bottom: 20px; }
   .landslide-route-shell .map-canvas-wrap { grid-area: map; position: relative; inset: auto; min-width: 0; }
   .landslide-route-shell .action-bar { grid-area: controls; position: relative; inset: auto; margin: 14px 12px 0; max-height: none; overflow: visible; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'summary drawing' 'time time' 'primary primary'; gap: 14px; padding: 16px; }
   .landslide-route-shell .map-search { top: 12px; left: 12px; width: calc(100% - 80px); padding: 9px; gap: 6px; }
   .landslide-route-shell .map-tools { top: 12px; right: 12px; }
   .landslide-route-shell .draw-hint { top: auto; bottom: 32px; left: 12px; right: 12px; transform: none; max-width: none; }
-  .landslide-route-shell .validation-toast { grid-area: feedback; position: static; margin: 12px; width: auto; }
+  .landslide-route-shell .validation-toast { grid-area: feedback; position: static; margin: 10px 12px 0; width: auto; }
 }
 @media (max-width: 640px) {
   .landslide-route-shell .workspace-header { height: 62px; grid-template-columns: minmax(0, 1fr) auto; padding: 0 12px; }

@@ -17,7 +17,6 @@ describe('validated Landslide session state', () => {
     state.areaClosed = true;
     state.windowStart = '2026-08-01';
     state.windowEnd = '2026-08-15';
-    state.productType = 'GOFF';
     state.catalogResult = {
       mode: 'catalog-preflight-only',
       status: 'ready',
@@ -43,7 +42,6 @@ describe('validated Landslide session state', () => {
     expect(restored.coordinates).toEqual(state.coordinates);
     expect(restored.areaClosed).toBe(true);
     expect(restored.windowStart).toBe('2026-08-01');
-    expect(restored.productType).toBe('GOFF');
     expect(restored.catalogResult?.products[0].granule_name).toBe('NISAR_GOFF_1');
     expect(restored.selectedHarmonyProduct?.granule_name).toBe('NISAR_GOFF_1');
     expect(storage.get('sarguardian.landslide.session.v1.user-1')).not.toContain('token');
@@ -64,7 +62,6 @@ describe('validated Landslide session state', () => {
     const restored = loadLandslideSessionState('user-1');
     expect(restored.coordinates).toEqual([]);
     expect(restored.areaClosed).toBe(false);
-    expect(restored.productType).toBe('GUNW');
     expect(restored.catalogResult).toBeNull();
   });
 
