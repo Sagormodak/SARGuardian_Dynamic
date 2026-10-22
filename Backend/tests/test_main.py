@@ -8,6 +8,7 @@ from app import main as main_module
 from app.asf_catalog import ASFAdapterError, ASFSearchResult
 from app.auth import get_current_user
 from app.main import app
+from app.persistence import PersistenceError
 
 client = TestClient(app)
 
@@ -123,6 +124,34 @@ def test_catalog_upstream_failure_is_not_reported_as_no_data(monkeypatch) -> Non
     response = authenticated_client().post("/api/catalog/search", json=valid_payload())
     assert response.status_code == 502
     assert response.json()["status"] == "upstream_error"
+
+
+def test_catalog_persistence_failure_is_reported_without_fabricating_a_preflight(monkeypatch) -> None:
+    monkeypatch.setattr(main_module, "search_asf_catalog", lambda *args: ASFSearchResult(rows=[{
+        "granuleName": "NISAR_L2_GUNW_TEST",
+        "productType": "GUNW",
+        "startTime": "2026-08-01T00:00:00Z",
+        "stopTime": "2026-08-13T00:00:00Z",
+        "sizeMB": {"file.h5": {"bytes": 2_000_000}},
+    }], truncated=False, query_url="https://example.invalid"))
+    monkeypatch.setattr(main_module, "normalize_product_rows", lambda rows, product_type: ([{
+        "granule_name": "NISAR_L2_GUNW_TEST",
+        "product_type": "GUNW",
+        "observation_dates": ["2026-08-01", "2026-08-13"],
+        "size_mb": 2,
+    }], 0, []))
+
+    class FailingPreflightStore:
+        def save_preflight(self, owner_uid, request_snapshot, manifest_snapshot):
+            raise PersistenceError("database unavailable")
+
+    monkeypatch.setattr(main_module, "get_job_store", lambda: FailingPreflightStore())
+    response = authenticated_client().post("/api/catalog/search", json=valid_payload())
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "persistence_error",
+        "message": "The preflight could not be persisted for job confirmation.",
+    }
 
 
 def test_catalog_rejects_open_polygon_malformed_json_and_oversized_body() -> None:

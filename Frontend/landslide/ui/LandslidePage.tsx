@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { importLibrary, setOptions } from '@googlemaps/js-api-loader';
 import type { User } from 'firebase/auth';
-import { analyzeGunwAoiQuality, getNisarHarmonyJobStatus, inspectNisarAoiWindow, searchNisarCatalog, startGunwQualityLayers, startNisarHarmonyLayerJob, verifyGunwNativeSourceMask } from '../../src/api/catalog';
-import type { AoiWindowResponse, CatalogProduct, CatalogResponse, GunwQualityAnalysisResponse, HarmonyLayerRole, HarmonyQualityLayerBundle, HarmonyQualityLayerJob, NativeSourceMaskVerificationResponse, NisarProductType, SubmittedHarmonyLayerJob } from '../../src/api/catalog';
-import { investigate } from '../engine/adapter';
-import { calculateGeodesicAreaKm2, canSubmitCatalogPreflight, timestampToRequest, validateAnalysisRequest, validateCatalogPreflight, validatePolyline } from '../engine/validation';
+import { analyzeGunwAoiQuality, createQueuedJob, getNisarHarmonyJobStatus, getProcessingJob, inspectNisarAoiWindow, listProcessingJobs, searchNisarCatalog, startGunwQualityLayers, startNisarHarmonyLayerJob, verifyGunwNativeSourceMask } from '../../src/api/catalog';
+import type { AoiWindowResponse, CatalogProduct, CatalogResponse, GunwQualityAnalysisResponse, HarmonyLayerRole, HarmonyQualityLayerBundle, HarmonyQualityLayerJob, NativeSourceMaskVerificationResponse, NisarProductType, ProcessingJob, SubmittedHarmonyLayerJob } from '../../src/api/catalog';
+import { calculateGeodesicAreaKm2, canSubmitCatalogPreflight, validateCatalogPreflight, validatePolyline } from '../engine/validation';
 import { scheduleErrorToastDismissal } from './errorToast';
-import type { AnalysisRequest, Coordinate, InvestigationPolyline, InvestigationResult, LocationSelection, TimestampSelection } from '../engine/types';
+import { createAoiOverlayController } from './mapOverlays';
+import { loadLandslideSessionState, persistLandslideSessionState } from './sessionState';
+import type { Coordinate, InvestigationResult, LocationSelection } from '../engine/types';
 import './landslide.css';
+import './workspace.css';
 
 let mapsLoaderConfigured = false;
 const MIN_MAP_ZOOM = 5;
@@ -15,42 +17,54 @@ const DEFAULT_MAP_ZOOM = 5;
 
 type MapCanvasProps = {
   location: LocationSelection | null;
+  searchText: string;
   coordinates: Coordinate[];
+  areaClosed: boolean;
   drawing: boolean;
   selectedVertexIndex: number | null;
+  isVisible: boolean;
   onLocation: (location: LocationSelection) => void;
   onCoordinates: (coordinates: Coordinate[], isClosed: boolean) => void;
   onSelectedVertex: (index: number | null) => void;
   onSearchText: (value: string) => void;
-  onMapReady: (map: google.maps.Map) => void;
+  onMapReady: (map: google.maps.Map | null) => void;
+  onPlacesReady: (ready: boolean, message?: string) => void;
 };
 
-function MapCanvas({ location, coordinates, drawing, selectedVertexIndex, onLocation, onCoordinates, onSelectedVertex, onSearchText, onMapReady }: MapCanvasProps) {
+function MapCanvas({ location, searchText, coordinates, areaClosed, drawing, selectedVertexIndex, isVisible, onLocation, onCoordinates, onSelectedVertex, onSearchText, onMapReady, onPlacesReady }: MapCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<google.maps.Map | null>(null);
-  const polygonRef = useRef<google.maps.Polygon | null>(null);
-  const markerRef = useRef<google.maps.Marker | null>(null);
-  const markersRef = useRef<google.maps.Marker[]>([]);
   const drawingRef = useRef(drawing);
   const coordinatesRef = useRef(coordinates);
+  const searchTextRef = useRef(searchText);
   const onCoordinatesRef = useRef(onCoordinates);
   const onLocationRef = useRef(onLocation);
   const onSelectedVertexRef = useRef(onSelectedVertex);
+  const onSearchTextRef = useRef(onSearchText);
+  const autocompleteRef = useRef<google.maps.places.PlaceAutocompleteElement | null>(null);
+  const [readyMap, setReadyMap] = useState<google.maps.Map | null>(null);
   const [mapError, setMapError] = useState('');
-  const [placesError, setPlacesError] = useState('');
+  const initialAoiRef = useRef(coordinates);
+  const [aoiOverlays] = useState(() => createAoiOverlayController({
+    onCoordinates: (next, closed) => onCoordinatesRef.current(next, closed),
+    onSelectedVertex: (index) => onSelectedVertexRef.current(index),
+  }));
 
   drawingRef.current = drawing;
   coordinatesRef.current = coordinates;
+  searchTextRef.current = searchText;
   onCoordinatesRef.current = onCoordinates;
   onLocationRef.current = onLocation;
   onSelectedVertexRef.current = onSelectedVertex;
+  onSearchTextRef.current = onSearchText;
 
   useEffect(() => {
     let active = true;
+    let mapClickListener: google.maps.MapsEventListener | undefined;
+    const autocompleteEvents = new AbortController();
     const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined;
 
     if (!apiKey) {
-          setMapError('Add VITE_GOOGLE_MAPS_API_KEY to .env to enable Google Maps imagery.');
+      setMapError('Google Maps is not configured. Location search and saved investigation details remain available.');
       return undefined;
     }
 
@@ -73,13 +87,13 @@ function MapCanvas({ location, coordinates, drawing, selectedVertexIndex, onLoca
           mapTypeControl: false,
           zoomControl: false,
           clickableIcons: false,
-          backgroundColor: '#dfeff3',
+          backgroundColor: '#102f40',
         });
 
-        map.addListener('click', (event: google.maps.MapMouseEvent) => {
+        mapClickListener = map.addListener('click', (event: google.maps.MapMouseEvent) => {
           if (!drawingRef.current || !event.latLng) return;
           const next: Coordinate = [Number(event.latLng.lng().toFixed(6)), Number(event.latLng.lat().toFixed(6))];
-          const existing = coordinatesRef.current.map((point) => point);
+          const existing = [...coordinatesRef.current];
           if (existing.length >= 2) {
             const first = existing[0];
             const distanceKm = Math.hypot(next[0] - first[0], next[1] - first[1]) * 111;
@@ -90,177 +104,124 @@ function MapCanvas({ location, coordinates, drawing, selectedVertexIndex, onLoca
             }
           }
           onCoordinatesRef.current([...existing, next], false);
-          onSelectedVertexRef.current([...existing, next].length - 1);
+          onSelectedVertexRef.current(existing.length);
         });
 
-        mapRef.current = map;
+        setReadyMap(map);
         onMapReady(map);
 
         try {
           const places = await importLibrary('places');
-          const searchContainer = document.querySelector<HTMLElement>('#landslide-place-search');
-          if (!searchContainer) return;
-
-          type PlacePrediction = {
-            toPlace: () => Promise<{ fetchFields: (options: { fields: string[] }) => Promise<void>; displayName?: string; formattedAddress?: string; location?: google.maps.LatLng }>;
-          };
-          type PlacesLibrary = typeof places & {
-            PlaceAutocompleteElement?: new (options: { includedPrimaryTypes: string[] }) => HTMLElement & {
-              addEventListener: (type: 'gmp-select', listener: (event: Event) => void) => void;
-            };
-          };
-          const PlaceAutocompleteElement = (places as PlacesLibrary).PlaceAutocompleteElement;
-          if (!PlaceAutocompleteElement) {
-            setPlacesError('Places search is unavailable. Enable Places API (New) for this key.');
+          if (!active) return;
+          const searchContainer = containerRef.current?.closest('.map-main')?.querySelector<HTMLElement>('#landslide-place-search');
+          if (!searchContainer || !places.PlaceAutocompleteElement) {
+            onPlacesReady(false);
             return;
           }
-
-          const autocomplete = new PlaceAutocompleteElement({
+          const autocomplete = new places.PlaceAutocompleteElement({
             includedPrimaryTypes: ['administrative_area_level_1', 'administrative_area_level_2', 'country', 'locality', 'natural_feature', 'establishment'],
           });
           autocomplete.classList.add('place-autocomplete-element');
-          searchContainer.innerHTML = '';
-          searchContainer.appendChild(autocomplete);
-          autocomplete.addEventListener('input', () => onSearchText(autocomplete.value));
-          autocomplete.addEventListener('gmp-select', (event: Event) => {
+          autocomplete.placeholder = 'Search a place or coordinates';
+          autocomplete.value = searchTextRef.current;
+          autocomplete.name = 'place';
+          autocompleteRef.current = autocomplete;
+          searchContainer.replaceChildren(autocomplete);
+          onPlacesReady(true);
+
+          autocomplete.addEventListener('input', () => onSearchTextRef.current(autocomplete.value), { signal: autocompleteEvents.signal });
+          autocomplete.addEventListener('gmp-error', () => {
+            onPlacesReady(false);
+          }, { signal: autocompleteEvents.signal });
+          autocomplete.addEventListener('gmp-select', (event) => {
             void (async () => {
-              const prediction = (event as CustomEvent<{ placePrediction?: PlacePrediction }>).detail?.placePrediction;
-              if (!prediction) return;
-              const place = await prediction.toPlace();
+              const place = event.placePrediction.toPlace();
               await place.fetchFields({ fields: ['displayName', 'formattedAddress', 'location'] });
-              if (!place.location) return;
+              if (!active || !place.location) return;
               const displayName = place.formattedAddress || place.displayName || 'Selected place';
               onLocationRef.current({
-                searchText: displayName,
-                name: displayName,
-                latitude: place.location.lat(),
-                longitude: place.location.lng(),
+                searchText: displayName, name: displayName,
+                latitude: place.location.lat(), longitude: place.location.lng(),
               });
-            })().catch(() => setPlacesError('The selected place could not be loaded. Check Places API (New) access for this key.'));
-          });
+            })().catch(() => {
+              if (active) onPlacesReady(false, 'The selected place could not be loaded. Search again or enter coordinates.');
+            });
+          }, { signal: autocompleteEvents.signal });
         } catch {
-          setPlacesError('Places search is unavailable. Enable Places API (New) and billing for this key.');
+          if (active) onPlacesReady(false);
         }
       })
-      .catch(() => setMapError('Google Maps could not load. Check the API key and Maps JavaScript API access.'));
+      .catch(() => {
+        if (active) setMapError('Google Maps could not load. Check the connection and Maps JavaScript API access.');
+      });
 
-    return () => { active = false; };
-  }, [onMapReady, onSearchText]);
+    return () => {
+      active = false;
+      mapClickListener?.remove();
+      autocompleteEvents.abort();
+      autocompleteRef.current?.remove();
+      autocompleteRef.current = null;
+      onPlacesReady(false);
+      onMapReady(null);
+    };
+  }, [onMapReady, onPlacesReady]);
 
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    const path = coordinates.map(([lng, lat]) => ({ lat, lng }));
-
-    if (polygonRef.current) {
-      polygonRef.current.setPaths(path);
-      polygonRef.current.setVisible(path.length > 1);
-    } else if (path.length > 1) {
-      polygonRef.current = new google.maps.Polygon({
-        map,
-        paths: path,
-        strokeColor: '#bfeaff',
-        fillColor: '#49b8f2',
-        fillOpacity: 0.24,
-        strokeOpacity: 0.95,
-        strokeWeight: 2.5,
-        clickable: false,
-      });
-    }
-
-    if (path.length <= 1 && polygonRef.current) {
-      polygonRef.current.setVisible(false);
-    }
-
-    const nextMarkers: google.maps.Marker[] = [];
-    for (let index = 0; index < coordinates.length; index += 1) {
-      const coordinate = coordinates[index];
-      const existing = markersRef.current[index];
-      const marker = existing ?? new google.maps.Marker({
-        map,
-        position: { lat: coordinate[1], lng: coordinate[0] },
-        draggable: true,
-        clickable: true,
-        zIndex: index === 0 ? 30 : 25,
-      });
-
-      marker.setPosition({ lat: coordinate[1], lng: coordinate[0] });
-      marker.setMap(map);
-      marker.setDraggable(true);
-      marker.setVisible(true);
-      marker.setZIndex(index === 0 ? 30 : 25);
-      marker.setIcon({
-        path: google.maps.SymbolPath.CIRCLE,
-        scale: selectedVertexIndex === index ? 7 : index === 0 ? 6.5 : 5.8,
-        fillColor: index === 0 && drawing ? '#d4f5ff' : '#f3fcff',
-        fillOpacity: 1,
-        strokeColor: index === 0 && drawing ? '#9ae5ff' : '#d8f2ff',
-        strokeWeight: selectedVertexIndex === index ? 2.5 : 1.8,
-      });
-
-      marker.addListener('click', () => {
-        onSelectedVertexRef.current(index);
-        if (index === 0 && coordinatesRef.current.length >= 3) {
-          onCoordinatesRef.current(coordinatesRef.current, true);
-          onSelectedVertexRef.current(0);
-        }
-      });
-
-      marker.addListener('dragend', (event: google.maps.MapMouseEvent) => {
-        if (!event.latLng) return;
-        const updated = coordinatesRef.current.map((point) => point);
-        const next: Coordinate = [Number(event.latLng.lng().toFixed(6)), Number(event.latLng.lat().toFixed(6))];
-        updated[index] = next;
-        onCoordinatesRef.current(updated, coordinatesRef.current.length >= 3 && index === 0);
-        onSelectedVertexRef.current(index);
-      });
-
-      nextMarkers.push(marker);
-    }
-
-    for (let index = markersRef.current.length - 1; index >= coordinates.length; index -= 1) {
-      markersRef.current[index].setMap(null);
-    }
-
-    markersRef.current = nextMarkers;
-  }, [coordinates, drawing, selectedVertexIndex]);
+    aoiOverlays.update({ coordinates, areaClosed, drawing, selectedVertexIndex });
+  }, [aoiOverlays, coordinates, areaClosed, drawing, selectedVertexIndex]);
 
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !location) return;
+    if (!readyMap) return undefined;
+    aoiOverlays.attach(readyMap);
+    return () => aoiOverlays.detach();
+  }, [aoiOverlays, readyMap]);
+
+  useEffect(() => {
+    if (!readyMap || !location) return undefined;
     const position = { lat: location.latitude, lng: location.longitude };
-    map.panTo(position);
-    map.setZoom(Math.max(7, map.getZoom() ?? 7));
-    markerRef.current?.setMap(null);
-    markerRef.current = new google.maps.Marker({
-      map,
-      position,
-      title: location.name,
-      animation: google.maps.Animation.DROP,
+    readyMap.panTo(position);
+    readyMap.setZoom(Math.max(7, readyMap.getZoom() ?? 7));
+    const marker = new google.maps.Marker({
+      map: readyMap, position, title: location.name, animation: google.maps.Animation.DROP,
     });
-  }, [location]);
+    return () => marker.setMap(null);
+  }, [location, readyMap]);
+
+  useEffect(() => {
+    if (autocompleteRef.current && autocompleteRef.current.value !== searchText) {
+      autocompleteRef.current.value = searchText;
+    }
+  }, [searchText]);
+
+  useEffect(() => {
+    if (!readyMap || !isVisible) return;
+    const center = readyMap.getCenter();
+    google.maps.event.trigger(readyMap, 'resize');
+    if (initialAoiRef.current.length > 1) {
+      const bounds = new google.maps.LatLngBounds();
+      initialAoiRef.current.forEach(([lng, lat]) => bounds.extend({ lat, lng }));
+      readyMap.fitBounds(bounds, 64);
+      initialAoiRef.current = [];
+    } else if (center) readyMap.setCenter(center);
+  }, [isVisible, readyMap]);
 
   return (
-    <div className="map-canvas-wrap">
-      <div ref={containerRef} className="google-map" aria-label="Google satellite map" />
+    <div className="map-canvas-wrap" aria-busy={!readyMap && !mapError}>
+      <div ref={containerRef} className="google-map" aria-label="Interactive investigation map" />
+      {!readyMap && !mapError && (
+        <div className="map-loading" role="status"><span className="workspace-status-dot" />Connecting to Google Maps…</div>
+      )}
       {mapError && (
-        <div className="map-unavailable">
-          <span>MAPS SETUP</span>
-          <strong>Satellite imagery is not connected.</strong>
+        <div className="map-unavailable" role="status">
+          <span>MAP CONNECTION</span>
+          <strong>The map is unavailable.</strong>
           <small>{mapError}</small>
         </div>
       )}
-      {placesError && (
-        <div className="places-unavailable" role="status">{placesError}</div>
-      )}
-      {drawing && !mapError && (
-        <div className="draw-hint">Click to trace the area and snap back to the first vertex to close it.</div>
-      )}
+      {drawing && readyMap && <div className="draw-hint">Trace your area. Select the first vertex or Close area to finish.</div>}
     </div>
   );
 }
-
 function Icon({ name }: { name: 'plus' | 'minus' | 'locate' | 'layers' | 'fullscreen' | 'search' | 'draw' | 'undo' | 'clear' | 'area' | 'home' }) {
   const paths = {
     plus: 'M12 5v14M5 12h14',
@@ -364,16 +325,18 @@ function CatalogPreflightPanel({
           {result.products.map((product, index) => {
             const isExtractableGunw = result.query.product_type === 'GUNW'
               && /^NISAR_L2_(PR|UR)_GUNW_[A-Za-z0-9_]+$/.test(product.granule_name);
-            const isSelected = selectedGranuleName === product.granule_name;
+            const isSelected = product.granule_name === selectedGranuleName;
             return (
               <div className={`catalog-product-row${isSelected ? ' is-selected' : ''}`} key={`${product.granule_name}-${index}`}>
                 <div className="catalog-product-main">
                   <strong title={product.granule_name}>{product.granule_name}</strong>
+                  <small>Processing level: {product.processing_level || 'Not reported'} | Direction: {product.direction || 'Not reported'} | Path: {product.path ?? 'Not reported'}</small>
                   <small>{product.observation_dates.join(' → ') || product.start_time || 'Acquisition date not parsed'} · {product.direction || 'Direction unknown'}{product.path ? ` · path ${product.path}` : ''}</small>
                 </div>
                 <div className="catalog-product-actions">
-                  <span>{product.size_mb == null ? 'Size n/a' : formatGib(product.size_mb / 1024)}</span>
-                  <button type="button" className="catalog-select-product" disabled={!isExtractableGunw} onClick={() => onSelectProduct(product)}>
+                  <span>{product.size_mb == null ? 'Size not reported' : formatGib(product.size_mb / 1024)}</span>
+                  <span className="catalog-metadata-label">Metadata only</span>
+                  <button type="button" className="catalog-select-product" disabled={!isExtractableGunw} onClick={() => onSelectProduct(product)} aria-pressed={isSelected}>
                     {isSelected ? 'Selected' : isExtractableGunw ? 'Select product' : 'GUNW only'}
                   </button>
                 </div>
@@ -390,6 +353,114 @@ function CatalogPreflightPanel({
   );
 }
 
+function QueuedJobPanel({
+  result,
+  confirmSubmission,
+  onConfirmSubmissionChange,
+  isSubmitting,
+  error,
+  message,
+  job,
+  jobs,
+  isLoadingJobs,
+  selectedJob,
+  isLoadingDetail,
+  onCreate,
+  onRefresh,
+  onInspect,
+}: {
+  result: CatalogResponse;
+  confirmSubmission: boolean;
+  onConfirmSubmissionChange: (value: boolean) => void;
+  isSubmitting: boolean;
+  error: string;
+  message: string;
+  job: ProcessingJob | null;
+  jobs: ProcessingJob[];
+  isLoadingJobs: boolean;
+  selectedJob: ProcessingJob | null;
+  isLoadingDetail: boolean;
+  onCreate: () => void;
+  onRefresh: () => void;
+  onInspect: (jobId: string) => void;
+}) {
+  const canCreate = result.status === 'ready' && Boolean(result.preflight_id);
+  return (
+    <section className="catalog-preflight" aria-live="polite">
+      <div className="catalog-preflight-heading">
+        <div>
+          <span className="result-kicker">DURABLE JOB CONFIRMATION</span>
+          <h3>Create a queued Landslide job</h3>
+        </div>
+      </div>
+      <p className="catalog-notice">
+        The ASF metadata preflight is persisted for this signed-in account. Explicitly confirm to create one durable queued job from this immutable snapshot.
+      </p>
+      {!canCreate && (
+        <p className="catalog-warning" role="status">
+          {result.status === 'ready' && !result.preflight_id
+            ? 'The preflight is ready, but persistence did not return a preflight ID. No job can be created.'
+            : 'A queued job is available only after a successful ASF preflight with a persisted preflight ID.'}
+        </p>
+      )}
+      {canCreate && (
+        <label className="catalog-confirmation">
+          <input type="checkbox" checked={confirmSubmission} onChange={(event) => onConfirmSubmissionChange(event.target.checked)} />
+          <span>I confirm this AOI, date window, product family, and catalogue snapshot for queued processing.</span>
+        </label>
+      )}
+      <button type="button" className="confirm-button" disabled={!canCreate || !confirmSubmission || isSubmitting} onClick={onCreate}>
+        {isSubmitting ? 'Creating queued job...' : 'Confirm and queue job'}
+      </button>
+      {error && <p className="catalog-warning" role="alert">{error}</p>}
+      {message && <p className="catalog-notice" role="status">{message}</p>}
+      {job && (
+        <div className="catalog-stats">
+          <div><span>Job ID</span><strong>{job.id}</strong></div>
+          <div><span>State</span><strong>{job.state}</strong></div>
+          <div><span>Product family</span><strong>{job.product_family}</strong></div>
+        </div>
+      )}
+      <div className="catalog-preflight-heading">
+        <h4>Your persisted jobs</h4>
+        <button type="button" onClick={onRefresh} disabled={isLoadingJobs}>{isLoadingJobs ? 'Refreshing...' : 'Refresh jobs'}</button>
+      </div>
+      {jobs.length === 0 && !isLoadingJobs && <p className="catalog-empty">No persisted jobs have been loaded in this session.</p>}
+      {jobs.length > 0 && (
+        <div className="catalog-product-list">
+          {jobs.map((listedJob) => (
+            <div className="catalog-product-row" key={listedJob.id}>
+              <div className="catalog-product-main">
+                <strong>{listedJob.id}</strong>
+                <small>{listedJob.product_family} · {listedJob.state} · {new Date(listedJob.created_at).toLocaleString()}</small>
+              </div>
+              <button type="button" onClick={() => onInspect(listedJob.id)} disabled={isLoadingDetail}>View details</button>
+            </div>
+          ))}
+        </div>
+      )}
+      {selectedJob && (
+        <p className="catalog-notice" role="status">
+          Selected job <strong>{selectedJob.id}</strong> is <strong>{selectedJob.state}</strong>. No worker has been dispatched by this milestone.
+          {selectedJob.error_message ? ` ${selectedJob.error_message}` : ''}
+        </p>
+      )}
+    </section>
+  );
+}
+
+function ProcessingUnavailablePanel() {
+  return (
+    <section className="catalog-preflight" aria-live="polite">
+      <span className="result-kicker">PROCESSING STATUS</span>
+      <h3>Science processing is not connected yet</h3>
+      <p className="catalog-notice">
+        Harmony extraction, raster diagnostics, the science worker, callbacks, and private result delivery are not enabled in this milestone. No fabricated results or processing status are shown.
+      </p>
+    </section>
+  );
+}
+
 const HARMONY_LAYER_OPTIONS: Array<{ value: HarmonyLayerRole; label: string }> = [
   { value: 'unwrapped_phase', label: 'Unwrapped phase · starting layer' },
   { value: 'coherence', label: 'Coherence magnitude' },
@@ -398,6 +469,8 @@ const HARMONY_LAYER_OPTIONS: Array<{ value: HarmonyLayerRole; label: string }> =
   { value: 'ionosphere_phase_screen_uncertainty', label: 'Ionosphere phase-screen uncertainty' },
   { value: 'mask', label: 'GUNW quality mask' },
 ];
+
+const HARMONY_UI_ENABLED = false;
 
 function HarmonyJobSubmissionPanel({
   product,
@@ -922,30 +995,55 @@ function loadSubmittedHarmonyJobs(): SubmittedHarmonyLayerJob[] {
   }
 }
 
-export function LandslidePage({ user, onHome, onSignOut }: { user: User; onHome: () => void; onSignOut: () => void }) {
-  const [searchText, setSearchText] = useState('');
-  const [location, setLocation] = useState<LocationSelection | null>(null);
-  const [searchState, setSearchState] = useState('');
-  const [coordinates, setCoordinates] = useState<Coordinate[]>([]);
-  const [areaClosed, setAreaClosed] = useState(false);
-  const [drawing, setDrawing] = useState(false);
+export function LandslidePage({ user, onHome, onResults, onBackToMap, isResultsPage, onSignOut }: {
+  user: User;
+  onHome: () => void;
+  onResults: () => void;
+  onBackToMap: () => void;
+  isResultsPage: boolean;
+  onSignOut: () => void;
+}) {
+  const [initialSessionState] = useState(() => loadLandslideSessionState(user.uid));
+  const [searchText, setSearchText] = useState(initialSessionState.searchText);
+  const [location, setLocation] = useState<LocationSelection | null>(initialSessionState.location);
+  const [searchState, setSearchState] = useState(initialSessionState.searchState);
+  const [isLocationSearching, setIsLocationSearching] = useState(false);
+  const [placesReady, setPlacesReady] = useState(false);
+  const [mapReady, setMapReady] = useState(false);
+  const locationSearchRef = useRef<AbortController | null>(null);
+  const catalogInFlightRef = useRef(false);
+  const [coordinates, setCoordinates] = useState<Coordinate[]>(initialSessionState.coordinates);
+  const [areaClosed, setAreaClosed] = useState(initialSessionState.areaClosed);
+  const [drawing, setDrawing] = useState(initialSessionState.drawing);
   const [selectedVertexIndex, setSelectedVertexIndex] = useState<number | null>(null);
-  const [windowStart, setWindowStart] = useState('');
-  const [windowEnd, setWindowEnd] = useState('');
+  const [windowStart, setWindowStart] = useState(initialSessionState.windowStart);
+  const [windowEnd, setWindowEnd] = useState(initialSessionState.windowEnd);
   const [result, setResult] = useState<InvestigationResult | null>(null);
   const [error, setError] = useState('');
   const [layerOpen, setLayerOpen] = useState(false);
   const [layerMode, setLayerMode] = useState<'satellite' | 'hybrid' | 'terrain'>('terrain');
+  const layerButtonRef = useRef<HTMLButtonElement>(null);
+  const layerMenuRef = useRef<HTMLDivElement>(null);
+  const mapTypeListenerRef = useRef<google.maps.MapsEventListener | null>(null);
   const [profileImageFailed, setProfileImageFailed] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [productType, setProductType] = useState<NisarProductType>('GUNW');
-  const [catalogResult, setCatalogResult] = useState<CatalogResponse | null>(null);
+  const [productType, setProductType] = useState<NisarProductType>(initialSessionState.productType);
+  const [catalogResult, setCatalogResult] = useState<CatalogResponse | null>(initialSessionState.catalogResult);
   const [isCatalogLoading, setIsCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState('');
+  const [queuedJob, setQueuedJob] = useState<ProcessingJob | null>(null);
+  const [confirmQueuedJob, setConfirmQueuedJob] = useState(false);
+  const [isCreatingQueuedJob, setIsCreatingQueuedJob] = useState(false);
+  const [queuedJobError, setQueuedJobError] = useState('');
+  const [queuedJobMessage, setQueuedJobMessage] = useState('');
+  const [processingJobs, setProcessingJobs] = useState<ProcessingJob[]>([]);
+  const [isLoadingProcessingJobs, setIsLoadingProcessingJobs] = useState(false);
+  const [selectedProcessingJob, setSelectedProcessingJob] = useState<ProcessingJob | null>(null);
+  const [isLoadingProcessingJobDetail, setIsLoadingProcessingJobDetail] = useState(false);
+  const [jobIdempotencyKey, setJobIdempotencyKey] = useState('');
   const [validationAlertDismissed, setValidationAlertDismissed] = useState(false);
   const [toastRevision, setToastRevision] = useState(0);
-  const [selectedHarmonyProduct, setSelectedHarmonyProduct] = useState<CatalogProduct | null>(null);
+  const [selectedHarmonyProduct, setSelectedHarmonyProduct] = useState<CatalogProduct | null>(initialSessionState.selectedHarmonyProduct);
   const [harmonyLayerRole, setHarmonyLayerRole] = useState<HarmonyLayerRole>('unwrapped_phase');
   const [harmonyWorkflowMaturity, setHarmonyWorkflowMaturity] = useState<'PROVISIONAL' | 'BETA'>('PROVISIONAL');
   const [harmonyWorkflowPolarization, setHarmonyWorkflowPolarization] = useState<'HH' | 'VV'>('HH');
@@ -1006,6 +1104,22 @@ export function LandslidePage({ user, onHome, onSignOut }: { user: User; onHome:
   }, [submittedHarmonyJobs]);
 
   useEffect(() => {
+    persistLandslideSessionState(user.uid, {
+      searchText,
+      searchState,
+      location,
+      coordinates,
+      areaClosed,
+      drawing,
+      windowStart,
+      windowEnd,
+      productType,
+      catalogResult,
+      selectedHarmonyProduct,
+    });
+  }, [areaClosed, catalogResult, coordinates, drawing, location, productType, searchState, searchText, selectedHarmonyProduct, user.uid, windowEnd, windowStart]);
+
+  useEffect(() => {
     setProfileImageFailed(false);
   }, [user.photoURL]);
 
@@ -1022,17 +1136,24 @@ export function LandslidePage({ user, onHome, onSignOut }: { user: User; onHome:
       }
     };
 
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setProfileMenuOpen(false);
+      setLayerOpen(false);
+      if ((event.target as HTMLElement | null)?.closest('.layers-menu')) layerButtonRef.current?.focus();
+      (event.target as HTMLElement | null)?.closest('.profile-inline')?.querySelector<HTMLButtonElement>('.workspace-profile-trigger')?.focus();
+    };
     document.addEventListener('mousedown', handleDocumentPointerDown);
-    return () => document.removeEventListener('mousedown', handleDocumentPointerDown);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleDocumentPointerDown);
+      document.removeEventListener('keydown', handleEscape);
+      locationSearchRef.current?.abort();
+    };
   }, []);
 
   const today = new Date().toISOString().slice(0, 10);
-  const timestamp: TimestampSelection = { mode: 'window', start: windowStart, end: windowEnd };
-  const polygon: InvestigationPolyline = { type: 'LineString', coordinates: areaClosed && coordinates.length > 2 ? [...coordinates, coordinates[0]] : coordinates, crs: 'EPSG:4326' };
   const polygonAreaKm2 = coordinates.length > 2 ? calculateGeodesicAreaKm2(coordinates) : 0;
-  // The AOI polygon itself is sufficient for catalogue search. Place search is optional;
-  // if no named place was selected, the reference demo can use the polygon centre.
-  const ready = Boolean(areaClosed && coordinates.length >= 3 && windowStart && windowEnd && windowEnd >= windowStart && windowEnd <= today);
   const catalogValidation = validateCatalogPreflight({
     coordinates,
     areaClosed,
@@ -1057,14 +1178,89 @@ export function LandslidePage({ user, onHome, onSignOut }: { user: User; onHome:
     });
   }, [visibleError, toastRevision]);
 
-  const handleMapReady = useCallback((map: google.maps.Map) => { mapRef.current = map; }, []);
+  const handleMapReady = useCallback((map: google.maps.Map | null) => {
+    mapTypeListenerRef.current?.remove();
+    mapTypeListenerRef.current = null;
+    mapRef.current = map;
+    setMapReady(Boolean(map));
+    if (!map) return;
+    const syncMapType = () => {
+      const mode = map.getMapTypeId();
+      if (mode === 'satellite' || mode === 'hybrid' || mode === 'terrain') setLayerMode(mode);
+    };
+    syncMapType();
+    mapTypeListenerRef.current = map.addListener('maptypeid_changed', syncMapType);
+  }, []);
+  const handlePlacesReady = useCallback((available: boolean, message?: string) => {
+    setPlacesReady(available);
+    if (message) setSearchState(message);
+  }, []);
+
+  useEffect(() => {
+    if (layerOpen) layerMenuRef.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
+  }, [layerOpen]);
+
+  const resetQueuedJobFlow = () => {
+    setQueuedJob(null);
+    setConfirmQueuedJob(false);
+    setQueuedJobError('');
+    setQueuedJobMessage('');
+    setSelectedProcessingJob(null);
+    setJobIdempotencyKey('');
+  };
+
+  const refreshProcessingJobs = async () => {
+    setIsLoadingProcessingJobs(true);
+    setQueuedJobError('');
+    try {
+      setProcessingJobs(await listProcessingJobs(user));
+    } catch (error) {
+      setQueuedJobError(error instanceof Error ? error.message : 'Could not load your processing jobs.');
+    } finally {
+      setIsLoadingProcessingJobs(false);
+    }
+  };
+
+  const createConfirmedJob = async () => {
+    if (!catalogResult?.preflight_id) return;
+    const idempotencyKey = jobIdempotencyKey || `sarguardian-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
+    setJobIdempotencyKey(idempotencyKey);
+    setIsCreatingQueuedJob(true);
+    setQueuedJobError('');
+    setQueuedJobMessage('');
+    try {
+      const created = await createQueuedJob(catalogResult.preflight_id, idempotencyKey, user);
+      setQueuedJob(created);
+      setQueuedJobMessage('The job is queued in durable persistence. No worker or scientific processing has started.');
+      await refreshProcessingJobs();
+    } catch (error) {
+      setQueuedJobError(error instanceof Error ? error.message : 'Could not create the queued job.');
+    } finally {
+      setIsCreatingQueuedJob(false);
+    }
+  };
+
+  const inspectProcessingJob = async (jobId: string) => {
+    setIsLoadingProcessingJobDetail(true);
+    setQueuedJobError('');
+    try {
+      setSelectedProcessingJob(await getProcessingJob(jobId, user));
+    } catch (error) {
+      setQueuedJobError(error instanceof Error ? error.message : 'Could not load the selected processing job.');
+    } finally {
+      setIsLoadingProcessingJobDetail(false);
+    }
+  };
 
   const updateLocation = (next: LocationSelection) => {
+    locationSearchRef.current?.abort();
+    setIsLocationSearching(false);
     setLocation(next);
     setSearchText(next.name);
     setSearchState('Location selected.');
     setResult(null);
     setCatalogResult(null);
+    resetQueuedJobFlow();
     setCatalogError('');
     setAoiWindowResult(null);
     setAoiWindowError('');
@@ -1077,17 +1273,28 @@ export function LandslidePage({ user, onHome, onSignOut }: { user: User; onHome:
     const query = searchText.trim();
     if (!query) return;
 
+    locationSearchRef.current?.abort();
+    const searchRequest = new AbortController();
+    locationSearchRef.current = searchRequest;
+
     const numeric = query.split(/[ ,]+/).map(Number);
     if (numeric.length === 2 && numeric.every(Number.isFinite) && Math.abs(numeric[0]) <= 90 && Math.abs(numeric[1]) <= 180) {
       updateLocation({ searchText: query, name: `${numeric[0].toFixed(4)}, ${numeric[1].toFixed(4)}`, latitude: numeric[0], longitude: numeric[1] });
+      setIsLocationSearching(false);
       return;
     }
 
     setSearchState('Searching...');
+    setIsLocationSearching(true);
     try {
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`);
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`, { signal: searchRequest.signal });
+      if (!response.ok) throw new Error('Location service unavailable');
       const matches = await response.json() as Array<{ display_name: string; lat: string; lon: string }>;
-      if (!matches.length) throw new Error('no matches');
+      if (searchRequest.signal.aborted) return;
+      if (!matches.length) {
+        setSearchState('No location found. Try another place or latitude, longitude.');
+        return;
+      }
       const match = matches[0];
       updateLocation({
         searchText: query,
@@ -1096,7 +1303,9 @@ export function LandslidePage({ user, onHome, onSignOut }: { user: User; onHome:
         longitude: Number(match.lon),
       });
     } catch {
-      setSearchState('No location found.');
+      if (!searchRequest.signal.aborted) setSearchState('Location search is unavailable. Check the connection or enter latitude, longitude.');
+    } finally {
+      if (!searchRequest.signal.aborted) setIsLocationSearching(false);
     }
   };
 
@@ -1105,6 +1314,7 @@ export function LandslidePage({ user, onHome, onSignOut }: { user: User; onHome:
     if (windowEnd && value > windowEnd) setWindowEnd('');
     setResult(null);
     setCatalogResult(null);
+    resetQueuedJobFlow();
     setCatalogError('');
     setAoiWindowResult(null);
     setAoiWindowError('');
@@ -1118,6 +1328,7 @@ export function LandslidePage({ user, onHome, onSignOut }: { user: User; onHome:
     setWindowEnd(value);
     setResult(null);
     setCatalogResult(null);
+    resetQueuedJobFlow();
     setCatalogError('');
     setAoiWindowResult(null);
     setAoiWindowError('');
@@ -1137,9 +1348,11 @@ export function LandslidePage({ user, onHome, onSignOut }: { user: User; onHome:
   const handleCoordinates = (next: Coordinate[], closed: boolean) => {
     setCoordinates(next);
     setAreaClosed(closed);
+    if (closed) setDrawing(false);
     setSelectedVertexIndex(closed ? 0 : next.length ? next.length - 1 : null);
     setResult(null);
     setCatalogResult(null);
+    resetQueuedJobFlow();
     setCatalogError('');
     setAoiWindowResult(null);
     setAoiWindowError('');
@@ -1157,6 +1370,7 @@ export function LandslidePage({ user, onHome, onSignOut }: { user: User; onHome:
     setSelectedVertexIndex(null);
     setResult(null);
     setCatalogResult(null);
+    resetQueuedJobFlow();
     setCatalogError('');
     setAoiWindowResult(null);
     setAoiWindowError('');
@@ -1176,6 +1390,7 @@ export function LandslidePage({ user, onHome, onSignOut }: { user: User; onHome:
     setAreaClosed(false);
     setResult(null);
     setCatalogResult(null);
+    resetQueuedJobFlow();
     setAoiWindowResult(null);
     setAoiWindowError('');
     setQualityAnalysis(null);
@@ -1191,6 +1406,7 @@ export function LandslidePage({ user, onHome, onSignOut }: { user: User; onHome:
     setSelectedVertexIndex(null);
     setResult(null);
     setCatalogResult(null);
+    resetQueuedJobFlow();
     setAoiWindowResult(null);
     setAoiWindowError('');
     setError('');
@@ -1211,7 +1427,16 @@ export function LandslidePage({ user, onHome, onSignOut }: { user: User; onHome:
     setValidationAlertDismissed(false);
   };
 
+  const selectCatalogProduct = (product: CatalogProduct) => {
+    setSelectedHarmonyProduct(product);
+    setQualityGranuleName(product.granule_name);
+    setConfirmFullGranuleLayer(false);
+    setHarmonySubmitError('');
+    setHarmonySubmitMessage('Product selected. Review the metadata before any separate processing workflow.');
+  };
+
   const runCatalogPreflight = async () => {
+    if (catalogInFlightRef.current) return;
     if (!catalogValidation.valid) {
       setValidationAlertDismissed(false);
       setToastRevision((current) => current + 1);
@@ -1219,7 +1444,9 @@ export function LandslidePage({ user, onHome, onSignOut }: { user: User; onHome:
       return;
     }
 
+    catalogInFlightRef.current = true;
     setCatalogError('');
+    resetQueuedJobFlow();
     setSelectedHarmonyProduct(null);
     setConfirmFullGranuleLayer(false);
     setHarmonySubmitError('');
@@ -1237,31 +1464,14 @@ export function LandslidePage({ user, onHome, onSignOut }: { user: User; onHome:
         productType,
       }, user);
       setCatalogResult(response);
+      onResults();
     } catch (error) {
       setToastRevision((current) => current + 1);
       setCatalogError(error instanceof Error ? error.message : 'Could not check the NISAR catalogue.');
     } finally {
+      catalogInFlightRef.current = false;
       setIsCatalogLoading(false);
     }
-  };
-
-  const selectHarmonyProduct = (product: CatalogProduct) => {
-    setSelectedHarmonyProduct(product);
-    setQualityGranuleName(product.granule_name);
-    setConfirmFullGranuleLayer(false);
-    setHarmonySubmitError('');
-    setHarmonySubmitMessage('Product selected. Choose a layer and submit it when ready.');
-    setHarmonyJobId('');
-    setAoiWindowResult(null);
-    setAoiWindowError('');
-    setQualityBundle(null);
-    setQualityStatuses({});
-    setQualityAnalysis(null);
-    setQualityError('');
-    setQualityMessage('');
-    setSourceMaskJobId('');
-    setSourceMaskVerification(null);
-    setSourceMaskVerificationError('');
   };
 
   const submitSelectedHarmonyLayer = async () => {
@@ -1623,73 +1833,182 @@ export function LandslidePage({ user, onHome, onSignOut }: { user: User; onHome:
     }
   };
 
-  const runInvestigation = () => {
-    if (!areaClosed || coordinates.length < 3) {
-      setError('Draw at least three vertices and press Close area before investigating.');
-      setToastRevision((current) => current + 1);
-      return;
-    }
 
-    // A polygon is a complete spatial selection by itself. Use its centre only as
-    // contextual metadata when the user did not choose a named place in search.
-    const analysisLocation: LocationSelection = location ?? {
-      searchText: 'Selected area centre',
-      name: 'Selected area centre',
-      latitude: coordinates.reduce((sum, point) => sum + point[1], 0) / coordinates.length,
-      longitude: coordinates.reduce((sum, point) => sum + point[0], 0) / coordinates.length,
-    };
-    const request: AnalysisRequest = { location: analysisLocation, polyline: polygon, timestamp: timestampToRequest(timestamp) };
-    const validation = validateAnalysisRequest(request);
-    if (!validation.valid) {
-      setError(validation.errors.join(' '));
-      setToastRevision((current) => current + 1);
-      return;
-    }
-
-    setError('');
-    setCatalogResult(null);
-    setCatalogError('');
-    setIsProcessing(true);
-    window.setTimeout(() => {
-      setResult(investigate(request));
-      setIsProcessing(false);
-    }, 350);
-  };
-
-  return (
-    <div className="landslide-page">
-      <header className="map-header">
-        <button className="map-brand" type="button" onClick={onHome}>
-          <span className="brand-orbit" />
-          <span>SAR</span><span>GUARDIAN</span>
+  const renderWorkspaceHeader = (title: string, subtitle: string, actionLabel: string, onAction: () => void) => {
+    const profileMenuId = actionLabel === 'Home' ? 'map-account-menu' : 'results-account-menu';
+    return (
+      <header className="map-header workspace-header">
+        <button className="brand-lockup workspace-brand" type="button" onClick={onHome} aria-label="SARGuardian home">
+          <span className="brand-mark" aria-hidden="true"><span className="brand-mountain" /><span className="brand-water" /></span>
+          <span className="brand-copy"><strong><b>SAR</b>Guardian</strong><small>EARTH IN SIGHT</small></span>
         </button>
-        <div className="map-title">
-          <span>LANDSLIDE</span>
-          <small>Investigation workspace</small>
-        </div>
-        <div className="map-header-actions">
-          <button type="button" onClick={onHome}>Home</button>
-          <div className="profile-inline" aria-label="Authenticated user profile" onClick={() => setProfileMenuOpen((current) => !current)}>
-            {user.photoURL && !profileImageFailed ? <img src={user.photoURL} alt="" className="profile-avatar" onError={() => setProfileImageFailed(true)} /> : <span className="profile-avatar profile-fallback">{(user.displayName ?? user.email ?? 'U').charAt(0).toUpperCase()}</span>}
-            <span>{user.displayName ?? user.email ?? 'Authenticated user'}</span>
+        <div className="map-title"><span>{title}</span><small>{subtitle}</small></div>
+        <nav className="map-header-actions" aria-label="Workspace navigation">
+          <button className="workspace-nav-link" type="button" onClick={onAction}>
+            {actionLabel === 'Home' ? <Icon name="home" /> : <span aria-hidden="true">←</span>}{actionLabel}
+          </button>
+          <div className="profile-inline">
+            <button className="workspace-profile-trigger" type="button" aria-label="Authenticated user profile" aria-expanded={profileMenuOpen} aria-controls={profileMenuId} onClick={() => setProfileMenuOpen((current) => !current)}>
+              {user.photoURL && !profileImageFailed ? <img src={user.photoURL} alt="" className="profile-avatar" onError={() => setProfileImageFailed(true)} /> : <span className="profile-avatar profile-fallback">{(user.displayName ?? user.email ?? 'U').charAt(0).toUpperCase()}</span>}
+              <span className="workspace-profile-name">{user.displayName ?? user.email ?? 'Authenticated user'}</span>
+              <span className="workspace-profile-chevron" aria-hidden="true">⌄</span>
+            </button>
             {profileMenuOpen && (
-              <div className="profile-popover glass-float">
+              <div id={profileMenuId} className="profile-popover glass-float" role="dialog" aria-label="Account actions">
+                <span className="result-kicker">YOUR ACCOUNT</span>
                 <strong>{user.displayName ?? 'Authenticated user'}</strong>
                 <span>{user.email ?? 'No email available'}</span>
                 <div className="signout-actions">
-                  <button type="button" className="cancel-button" onClick={(event) => { event.stopPropagation(); setProfileMenuOpen(false); }}>Close</button>
-                  <button type="button" className="confirm-button" onClick={(event) => { event.stopPropagation(); onSignOut(); setProfileMenuOpen(false); }}>Sign out</button>
+                  <button type="button" className="cancel-button" onClick={() => setProfileMenuOpen(false)}>Close</button>
+                  <button type="button" className="confirm-button" onClick={() => { onSignOut(); setProfileMenuOpen(false); }}>Sign out</button>
                 </div>
               </div>
             )}
           </div>
-        </div>
+        </nav>
       </header>
+    );
+  };
+
+  const renderCatalogWorkflow = () => {
+    if (!catalogResult) return null;
+    return (
+      <>
+        <CatalogPreflightPanel
+          result={catalogResult}
+          onClose={() => { setCatalogResult(null); resetQueuedJobFlow(); }}
+          onSelectProduct={selectCatalogProduct}
+          selectedGranuleName={selectedHarmonyProduct?.granule_name || ''}
+        />
+        {HARMONY_UI_ENABLED && (
+          <HarmonyJobSubmissionPanel
+            product={selectedHarmonyProduct}
+            areaClosed={areaClosed}
+            coordinatesCount={coordinates.length}
+            layerRole={harmonyLayerRole}
+            onLayerRoleChange={(value) => { setHarmonyLayerRole(value); setConfirmFullGranuleLayer(false); setHarmonySubmitError(''); }}
+            maturity={harmonyWorkflowMaturity}
+            onMaturityChange={(value) => { setHarmonyWorkflowMaturity(value); setConfirmFullGranuleLayer(false); setHarmonyJobId(''); setAoiWindowResult(null); setAoiWindowError(''); setQualityBundle(null); setQualityStatuses({}); setQualityAnalysis(null); setQualityError(''); setQualityMessage(''); setSourceMaskJobId(''); setSourceMaskVerification(null); setSourceMaskVerificationError(''); }}
+            polarization={harmonyWorkflowPolarization}
+            onPolarizationChange={(value) => { setHarmonyWorkflowPolarization(value); setConfirmFullGranuleLayer(false); setHarmonyJobId(''); setAoiWindowResult(null); setAoiWindowError(''); setQualityBundle(null); setQualityStatuses({}); setQualityAnalysis(null); setQualityError(''); setQualityMessage(''); setSourceMaskJobId(''); setSourceMaskVerification(null); setSourceMaskVerificationError(''); }}
+            confirmFullGranule={confirmFullGranuleLayer}
+            onConfirmFullGranuleChange={setConfirmFullGranuleLayer}
+            isSubmitting={isSubmittingHarmonyJob}
+            error={harmonySubmitError}
+            message={harmonySubmitMessage}
+            jobs={submittedHarmonyJobs}
+            checkingJobs={isCheckingSubmittedJobs}
+            onSubmit={submitSelectedHarmonyLayer}
+            onCheckJob={checkSubmittedHarmonyJob}
+            onCheckMatchingJobs={checkSelectedProductHarmonyJobs}
+            onUseAsPhase={useSubmittedJobAsPhase}
+            onUseAsMask={useSubmittedJobAsMask}
+          />
+        )}
+        {HARMONY_UI_ENABLED && productType === 'GUNW' && (
+          <AoiWindowPanel
+            coordinates={coordinates}
+            areaClosed={areaClosed}
+            jobId={harmonyJobId}
+            onJobIdChange={(value) => { setHarmonyJobId(value); setAoiWindowResult(null); setAoiWindowError(''); setQualityBundle(null); setQualityStatuses({}); setQualityAnalysis(null); setSourceMaskJobId(''); setSourceMaskVerification(null); setSourceMaskVerificationError(''); setQualityError(''); setQualityMessage(''); }}
+            isLoading={isAoiWindowLoading}
+            error={aoiWindowError}
+            result={aoiWindowResult}
+            onRun={runAoiWindowRead}
+            granuleName={qualityGranuleName}
+            onGranuleNameChange={(value) => { setQualityGranuleName(value); setQualityBundle(null); setQualityAnalysis(null); setSourceMaskJobId(''); setSourceMaskVerification(null); setSourceMaskVerificationError(''); setQualityError(''); setQualityMessage(''); }}
+            qualityBundle={qualityBundle}
+            qualityStatuses={qualityStatuses}
+            individualLayerJobs={individualLayerJobs}
+            individualLayersAvailable={individualLayersAvailable}
+            qualityMessage={qualityMessage}
+            qualityError={qualityError}
+            qualityStartLoading={isQualityStarting}
+            qualityCheckLoading={isQualityChecking}
+            qualityAnalyzeLoading={isQualityAnalyzing}
+            qualityAnalysis={qualityAnalysis}
+            sourceMaskJobId={sourceMaskJobId}
+            onSourceMaskJobIdChange={(value) => { setSourceMaskJobId(value); setSourceMaskVerification(null); setSourceMaskVerificationError(''); }}
+            sourceMaskJobOptions={sourceMaskJobOptions}
+            sourceMaskVerification={sourceMaskVerification}
+            sourceMaskVerificationLoading={isSourceMaskVerifying}
+            sourceMaskVerificationError={sourceMaskVerificationError}
+            onVerifySourceMask={runSourceMaskVerification}
+            onStartQualityLayers={startQualityLayers}
+            onCheckQualityLayers={checkQualityLayers}
+            onAnalyzeQuality={runQualityAnalysis}
+          />
+        )}
+        <QueuedJobPanel
+          result={catalogResult}
+          confirmSubmission={confirmQueuedJob}
+          onConfirmSubmissionChange={setConfirmQueuedJob}
+          isSubmitting={isCreatingQueuedJob}
+          error={queuedJobError}
+          message={queuedJobMessage}
+          job={queuedJob}
+          jobs={processingJobs}
+          isLoadingJobs={isLoadingProcessingJobs}
+          selectedJob={selectedProcessingJob}
+          isLoadingDetail={isLoadingProcessingJobDetail}
+          onCreate={createConfirmedJob}
+          onRefresh={refreshProcessingJobs}
+          onInspect={inspectProcessingJob}
+        />
+        <ProcessingUnavailablePanel />
+      </>
+    );
+  };
+
+  const renderResultsPage = () => (
+      <div className="nisar-results-page">
+        {renderWorkspaceHeader('NISAR CATALOGUE RESULTS', 'Metadata-only archive preflight', 'Back to map', onBackToMap)}
+        <main className="nisar-results-main">
+          {!catalogResult ? (
+            <section className="nisar-results-empty glass-float" aria-live="polite">
+              <span className="result-kicker">NISAR CATALOGUE</span>
+              <h1>No catalogue results are loaded</h1>
+              <p>Open the map, draw a valid AOI, choose a date range and product family, then run the archive check.</p>
+              <button className="investigate-button" type="button" onClick={onBackToMap}>Back to map</button>
+            </section>
+          ) : (
+            <>
+              <section className="nisar-results-summary glass-float" aria-labelledby="nisar-results-heading">
+                <div>
+                  <span className="result-kicker">ASF CATALOGUE PREFLIGHT · METADATA ONLY</span>
+                  <h1 id="nisar-results-heading">NISAR Catalogue Results</h1>
+                  <p>{catalogResult.message}</p>
+                </div>
+                <div className="nisar-summary-grid">
+                  <div><span>Status</span><strong>{catalogResult.status}</strong></div>
+                  <div><span>Matching products</span><strong>{catalogResult.product_count}</strong></div>
+                  <div><span>AOI area</span><strong>{catalogResult.query.aoi_area_km2.toFixed(2)} km²</strong></div>
+                  <div><span>Date range</span><strong>{catalogResult.query.start_date} → {catalogResult.query.end_date}</strong></div>
+                  <div><span>Product family</span><strong>{catalogResult.query.product_type}</strong></div>
+                  <div><span>Platform</span><strong>{catalogResult.query.platform}</strong></div>
+                  <div><span>Checked UTC</span><strong>{new Date(catalogResult.checked_at).toLocaleString()}</strong></div>
+                  <div><span>Result set</span><strong>{catalogResult.truncated ? 'Truncated' : 'Complete'}</strong></div>
+                </div>
+                <p className="catalog-notice"><b>Reported metadata size estimate:</b> {catalogResult.product_count === 0 ? 'No products' : formatGib(catalogResult.estimated_full_granule_volume_gib)} · Unknown-size products: {catalogResult.products_with_unknown_size}</p>
+                {catalogResult.warnings.length > 0 && <ul className="nisar-results-warnings">{catalogResult.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>}
+              </section>
+              <div className="nisar-results-workflow">{renderCatalogWorkflow()}</div>
+            </>
+          )}
+        </main>
+      </div>
+  );
+
+  const renderMapPage = () => (
+    <div className="landslide-page">
+      {renderWorkspaceHeader('LANDSLIDE', 'Investigation workspace', 'Home', onHome)}
 
       <main className="map-main">
         <MapCanvas
           location={location}
+          searchText={searchText}
           coordinates={coordinates}
+          areaClosed={areaClosed}
           drawing={drawing}
           selectedVertexIndex={selectedVertexIndex}
           onLocation={updateLocation}
@@ -1697,36 +2016,48 @@ export function LandslidePage({ user, onHome, onSignOut }: { user: User; onHome:
           onSelectedVertex={setSelectedVertexIndex}
           onSearchText={setSearchText}
           onMapReady={handleMapReady}
+          onPlacesReady={handlePlacesReady}
+          isVisible={!isResultsPage}
         />
 
         <form className="map-search glass-float" onSubmit={handleSearch}>
           <Icon name="search" />
-          <div id="landslide-place-search" className="google-place-autocomplete" aria-label="Search a place" />
-          <button type="submit">Search</button>
+          <div className="workspace-search-input">
+            <div id="landslide-place-search" className="google-place-autocomplete" aria-label="Search a place" hidden={!placesReady} />
+            {!placesReady && <input type="search" aria-label="Search a place or coordinates" placeholder="Search a place or coordinates" value={searchText} onChange={(event) => setSearchText(event.target.value)} />}
+          </div>
+          <button type="submit" disabled={isLocationSearching}>{isLocationSearching ? 'Searching…' : 'Search'}</button>
           {location && <span className="selected-place">{location.name}</span>}
-          <small>{searchState || 'Search a place to begin.'}</small>
+          <small role="status">{searchState || 'Find a location, then draw your area of interest.'}</small>
         </form>
 
-        <div className="map-tools glass-float" aria-label="Map controls">
-          <button type="button" aria-label="Zoom in" onClick={() => mapRef.current?.setZoom((mapRef.current.getZoom() ?? 5) + 1)}><Icon name="plus" /></button>
-          <button type="button" aria-label="Zoom out" onClick={() => mapRef.current?.setZoom(Math.max(MIN_MAP_ZOOM, (mapRef.current.getZoom() ?? DEFAULT_MAP_ZOOM) - 1))}><Icon name="minus" /></button>
-          <button type="button" aria-label="Locate selected place" onClick={() => location && mapRef.current?.panTo({ lat: location.latitude, lng: location.longitude })}><Icon name="locate" /></button>
+        <div className="map-tools glass-float" role="group" aria-label="Map controls" aria-disabled={!mapReady}>
+          <button type="button" aria-label="Zoom in" disabled={!mapReady} onClick={() => mapRef.current?.setZoom((mapRef.current.getZoom() ?? 5) + 1)}><Icon name="plus" /></button>
+          <button type="button" aria-label="Zoom out" disabled={!mapReady} onClick={() => mapRef.current?.setZoom(Math.max(MIN_MAP_ZOOM, (mapRef.current.getZoom() ?? DEFAULT_MAP_ZOOM) - 1))}><Icon name="minus" /></button>
+          <button type="button" aria-label="Locate selected place" disabled={!mapReady || !location} onClick={() => location && mapRef.current?.panTo({ lat: location.latitude, lng: location.longitude })}><Icon name="locate" /></button>
           <div className="layers-menu-wrap">
-            <button type="button" aria-label="Layers" onClick={() => setLayerOpen((current) => !current)}><Icon name="layers" /></button>
+            <button ref={layerButtonRef} type="button" aria-label="Layers" title={`Map layers: ${layerMode === 'hybrid' ? 'Satellite + labels' : layerMode}`} aria-haspopup="menu" aria-expanded={layerOpen} aria-controls="map-layer-menu" disabled={!mapReady} onClick={() => setLayerOpen((current) => !current)} onKeyDown={(event) => { if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setLayerOpen(true); } }}><Icon name="layers" /></button>
             {layerOpen && (
-              <div className="layers-menu glass-float" role="menu" aria-label="Map layers">
+              <div ref={layerMenuRef} id="map-layer-menu" className="layers-menu glass-float" role="menu" aria-label="Map layers" onKeyDown={(event) => {
+                if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+                event.preventDefault();
+                const items = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]'));
+                const current = items.indexOf(document.activeElement as HTMLButtonElement);
+                const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (current + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+                items[next]?.focus();
+              }}>
                 {(['satellite', 'hybrid', 'terrain'] as const).map((mode) => (
-                  <button key={mode} type="button" role="menuitemradio" aria-checked={layerMode === mode} className={layerMode === mode ? 'active' : ''} onClick={() => { setLayerMode(mode); mapRef.current?.setMapTypeId(mode); setLayerOpen(false); }}>
-                    {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                  <button key={mode} type="button" role="menuitemradio" aria-checked={layerMode === mode} className={layerMode === mode ? 'active' : ''} onClick={() => { mapRef.current?.setMapTypeId(mode); setLayerOpen(false); layerButtonRef.current?.focus(); }}>
+                    {mode === 'hybrid' ? 'Satellite + labels' : mode.charAt(0).toUpperCase() + mode.slice(1)}
                   </button>
                 ))}
               </div>
             )}
           </div>
-          <button type="button" aria-label="Fullscreen map" onClick={() => document.querySelector('.map-canvas-wrap')?.requestFullscreen()}><Icon name="fullscreen" /></button>
+          <button type="button" aria-label="Fullscreen map" disabled={!mapReady} onClick={() => document.querySelector('.map-canvas-wrap')?.requestFullscreen()}><Icon name="fullscreen" /></button>
         </div>
 
-        <section className="action-bar glass-float">
+        <section className="action-bar glass-float" aria-label="Investigation controls">
           {!result ? (
             <>
               {coordinates.length > 0 && (
@@ -1737,8 +2068,10 @@ export function LandslidePage({ user, onHome, onSignOut }: { user: User; onHome:
                 </div>
               )}
 
+              {coordinates.length === 0 && <div className="geometry-summary workspace-empty-aoi"><span>AREA OF INTEREST</span><strong>Select your study area</strong><small>Draw a polygon to begin</small></div>}
+
               <div className="draw-actions">
-                <button type="button" className={!drawing && !areaClosed ? 'active' : ''} onClick={beginGeometry}><Icon name="area" />Draw area</button>
+                <button type="button" className={!drawing && !areaClosed ? 'active' : ''} disabled={!mapReady} onClick={beginGeometry}><Icon name="area" />Draw area</button>
                 {drawing && (
                   <>
                     <button type="button" disabled={!coordinates.length} onClick={undo}><Icon name="undo" />Undo</button>
@@ -1750,7 +2083,7 @@ export function LandslidePage({ user, onHome, onSignOut }: { user: User; onHome:
                 )}
                 {!drawing && areaClosed && (
                   <>
-                    <button type="button" onClick={() => setDrawing(true)}><Icon name="draw" />Edit</button>
+                    <button type="button" disabled={!mapReady} onClick={() => setDrawing(true)}><Icon name="draw" />Edit</button>
                     <button type="button" onClick={clearGeometry}><Icon name="clear" />Clear</button>
                   </>
                 )}
@@ -1774,72 +2107,12 @@ export function LandslidePage({ user, onHome, onSignOut }: { user: User; onHome:
 
               <div className="action-buttons">
                 <button className="investigate-button" type="button" aria-invalid={!catalogEligible} disabled={!canSubmitCatalogPreflight(catalogValidation, isCatalogLoading)} onClick={runCatalogPreflight}>{isCatalogLoading ? 'Checking ASF...' : 'Check NISAR archive'}</button>
-                <button className="demo-button" type="button" disabled={!ready || isProcessing} onClick={runInvestigation}>{isProcessing ? 'Preparing demo...' : 'Reference demo'}</button>
               </div>
-              {catalogResult && <CatalogPreflightPanel
-                result={catalogResult}
-                onClose={() => { setCatalogResult(null); setSelectedHarmonyProduct(null); }}
-                onSelectProduct={selectHarmonyProduct}
-                selectedGranuleName={selectedHarmonyProduct?.granule_name || ''}
-              />}
               {catalogResult && (
-                <HarmonyJobSubmissionPanel
-                  product={selectedHarmonyProduct}
-                  areaClosed={areaClosed}
-                  coordinatesCount={coordinates.length}
-                  layerRole={harmonyLayerRole}
-                  onLayerRoleChange={(value) => { setHarmonyLayerRole(value); setConfirmFullGranuleLayer(false); setHarmonySubmitError(''); }}
-                  maturity={harmonyWorkflowMaturity}
-                  onMaturityChange={(value) => { setHarmonyWorkflowMaturity(value); setConfirmFullGranuleLayer(false); setHarmonyJobId(''); setAoiWindowResult(null); setAoiWindowError(''); setQualityBundle(null); setQualityStatuses({}); setQualityAnalysis(null); setQualityError(''); setQualityMessage(''); setSourceMaskJobId(''); setSourceMaskVerification(null); setSourceMaskVerificationError(''); }}
-                  polarization={harmonyWorkflowPolarization}
-                  onPolarizationChange={(value) => { setHarmonyWorkflowPolarization(value); setConfirmFullGranuleLayer(false); setHarmonyJobId(''); setAoiWindowResult(null); setAoiWindowError(''); setQualityBundle(null); setQualityStatuses({}); setQualityAnalysis(null); setQualityError(''); setQualityMessage(''); setSourceMaskJobId(''); setSourceMaskVerification(null); setSourceMaskVerificationError(''); }}
-                  confirmFullGranule={confirmFullGranuleLayer}
-                  onConfirmFullGranuleChange={setConfirmFullGranuleLayer}
-                  isSubmitting={isSubmittingHarmonyJob}
-                  error={harmonySubmitError}
-                  message={harmonySubmitMessage}
-                  jobs={submittedHarmonyJobs}
-                  checkingJobs={isCheckingSubmittedJobs}
-                  onSubmit={submitSelectedHarmonyLayer}
-                  onCheckJob={checkSubmittedHarmonyJob}
-                  onCheckMatchingJobs={checkSelectedProductHarmonyJobs}
-                  onUseAsPhase={useSubmittedJobAsPhase}
-                  onUseAsMask={useSubmittedJobAsMask}
-                />
-              )}
-              {catalogResult && productType === 'GUNW' && (
-                <AoiWindowPanel
-                  coordinates={coordinates}
-                  areaClosed={areaClosed}
-                  jobId={harmonyJobId}
-                  onJobIdChange={(value) => { setHarmonyJobId(value); setAoiWindowResult(null); setAoiWindowError(''); setQualityBundle(null); setQualityStatuses({}); setQualityAnalysis(null); setSourceMaskJobId(''); setSourceMaskVerification(null); setSourceMaskVerificationError(''); setQualityError(''); setQualityMessage(''); }}
-                  isLoading={isAoiWindowLoading}
-                  error={aoiWindowError}
-                  result={aoiWindowResult}
-                  onRun={runAoiWindowRead}
-                  granuleName={qualityGranuleName}
-                  onGranuleNameChange={(value) => { setQualityGranuleName(value); setQualityBundle(null); setQualityAnalysis(null); setSourceMaskJobId(''); setSourceMaskVerification(null); setSourceMaskVerificationError(''); setQualityError(''); setQualityMessage(''); }}
-                  qualityBundle={qualityBundle}
-                  qualityStatuses={qualityStatuses}
-                  individualLayerJobs={individualLayerJobs}
-                  individualLayersAvailable={individualLayersAvailable}
-                  qualityMessage={qualityMessage}
-                  qualityError={qualityError}
-                  qualityStartLoading={isQualityStarting}
-                  qualityCheckLoading={isQualityChecking}
-                  qualityAnalyzeLoading={isQualityAnalyzing}
-                  qualityAnalysis={qualityAnalysis}
-                  sourceMaskJobId={sourceMaskJobId}
-                  onSourceMaskJobIdChange={(value) => { setSourceMaskJobId(value); setSourceMaskVerification(null); setSourceMaskVerificationError(''); }}
-                  sourceMaskJobOptions={sourceMaskJobOptions}
-                  sourceMaskVerification={sourceMaskVerification}
-                  sourceMaskVerificationLoading={isSourceMaskVerifying}
-                  sourceMaskVerificationError={sourceMaskVerificationError}
-                  onVerifySourceMask={runSourceMaskVerification}
-                  onStartQualityLayers={startQualityLayers}
-                  onCheckQualityLayers={checkQualityLayers}
-                  onAnalyzeQuality={runQualityAnalysis}
-                />
+                <div className="catalog-map-result-link" aria-live="polite">
+                  <span>{catalogResult.product_count} {catalogResult.query.product_type} product{catalogResult.product_count === 1 ? '' : 's'} found.</span>
+                  <button className="investigate-button" type="button" onClick={onResults}>View NISAR results</button>
+                </div>
               )}
             </>
           ) : (
@@ -1855,6 +2128,15 @@ export function LandslidePage({ user, onHome, onSignOut }: { user: User; onHome:
           </div>
         )}
       </main>
+    </div>
+  );
+
+  return (
+    <div className="landslide-route-shell">
+      <div className={`landslide-map-keepalive${isResultsPage ? ' is-hidden' : ''}`} aria-hidden={isResultsPage}>
+        {renderMapPage()}
+      </div>
+      {isResultsPage && renderResultsPage()}
     </div>
   );
 }

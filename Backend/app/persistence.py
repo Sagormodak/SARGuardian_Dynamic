@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Any, Protocol
 from uuid import UUID, uuid4
+
+from .config import SettingsError, get_settings
 
 try:
     from supabase import Client, ClientOptions, create_client
@@ -30,6 +31,26 @@ class PreflightNotFoundError(PersistenceError):
 
 class PreflightExpiredError(PersistenceError):
     pass
+
+
+MODERN_SUPABASE_KEY_PREFIXES = ("sb_publishable_", "sb_secret_")
+
+
+def _is_modern_supabase_key(api_key: str) -> bool:
+    return api_key.startswith(MODERN_SUPABASE_KEY_PREFIXES)
+
+
+def _normalize_modern_key_headers(client: Any, api_key: str) -> None:
+    """Make PostgREST use an opaque Supabase key as `apikey`, never as Bearer."""
+    options = getattr(client, "options", None)
+    headers = getattr(options, "headers", None)
+    if not isinstance(headers, dict):
+        raise PersistenceConfigurationError("Supabase client headers could not be configured safely.")
+
+    for name in tuple(headers):
+        if name.lower() in {"authorization", "apikey", "api-key"}:
+            del headers[name]
+    headers["apikey"] = api_key
 
 
 class JobStore(Protocol):
@@ -70,7 +91,7 @@ class SupabaseJobStore:
         try:
             response = self.client.table("catalog_preflights").insert(values).select("id").execute()
         except Exception as exc:
-            raise PersistenceError("Could not persist the catalogue preflight.") from exc
+            raise PersistenceError("Could not persist the catalogue preflight.") from None
         if not self._data(response):
             raise PersistenceError("Catalogue preflight persistence returned no record.")
         return preflight_id
@@ -86,7 +107,7 @@ class SupabaseJobStore:
                 .execute()
             )
         except Exception as exc:
-            raise PersistenceError("Could not read the catalogue preflight.") from exc
+            raise PersistenceError("Could not read the catalogue preflight.") from None
         rows = self._data(response)
         return rows[0] if rows else None
 
@@ -101,7 +122,7 @@ class SupabaseJobStore:
                 .execute()
             )
         except Exception as exc:
-            raise PersistenceError("Could not check job idempotency.") from exc
+            raise PersistenceError("Could not check job idempotency.") from None
         rows = self._data(response)
         return rows[0] if rows else None
 
@@ -133,7 +154,7 @@ class SupabaseJobStore:
                 .execute()
             )
         except Exception as exc:
-            raise PersistenceError("Could not list processing jobs.") from exc
+            raise PersistenceError("Could not list processing jobs.") from None
         return self._data(response)
 
     def get_job(self, owner_uid: str, job_id: UUID) -> dict[str, Any] | None:
@@ -147,31 +168,37 @@ class SupabaseJobStore:
                 .execute()
             )
         except Exception as exc:
-            raise PersistenceError("Could not read the processing job.") from exc
+            raise PersistenceError("Could not read the processing job.") from None
         rows = self._data(response)
         return rows[0] if rows else None
 
 
 @lru_cache(maxsize=1)
 def get_job_store() -> SupabaseJobStore:
-    url = os.getenv("SUPABASE_URL", "").strip()
-    service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    try:
+        settings = get_settings()
+    except SettingsError as exc:
+        raise PersistenceConfigurationError(str(exc)) from None
+    url = settings.supabase_url
+    service_role_key = settings.supabase_service_role_key
     if not url or not service_role_key:
         raise PersistenceConfigurationError("Supabase persistence is not configured on this server.")
     if create_client is None or ClientOptions is None:
         raise PersistenceConfigurationError("The Supabase Python SDK is not installed on this server.")
+    modern_key = _is_modern_supabase_key(service_role_key)
+    options_headers = {"Authorization": ""} if modern_key else None
     try:
         client = create_client(
             url,
             service_role_key,
-            options=ClientOptions(auto_refresh_token=False, persist_session=False),
+            options=ClientOptions(
+                auto_refresh_token=False,
+                persist_session=False,
+                **({"headers": options_headers} if options_headers is not None else {}),
+            ),
         )
     except Exception as exc:
-        raise PersistenceConfigurationError("Supabase persistence could not be initialized.") from exc
-    try:
-        ttl = int(os.getenv("PREFLIGHT_TTL_SECONDS", "86400"))
-    except ValueError as exc:
-        raise PersistenceConfigurationError("PREFLIGHT_TTL_SECONDS is invalid.") from exc
-    if not 60 <= ttl <= 604800:
-        raise PersistenceConfigurationError("PREFLIGHT_TTL_SECONDS must be between 60 and 604800.")
-    return SupabaseJobStore(client, ttl)
+        raise PersistenceConfigurationError("Supabase persistence could not be initialized.") from None
+    if modern_key:
+        _normalize_modern_key_headers(client, service_role_key)
+    return SupabaseJobStore(client, settings.preflight_ttl_seconds)

@@ -153,9 +153,17 @@ def test_job_state_transitions_are_explicit() -> None:
 def test_sql_enforces_one_global_active_heavy_job_and_transition_guard() -> None:
     migration = Path(__file__).parents[1] / "migrations" / "001_processing_jobs.sql"
     sql = migration.read_text(encoding="utf-8")
+    assert "begin;" in sql
+    assert "commit;" in sql
+    assert "create table if not exists" in sql
+    assert "processing_job_state exists with an unexpected definition" in sql
     assert "processing_jobs_one_active_heavy_idx" in sql
     assert "where state in ('dispatching', 'running')" in sql
     assert "enforce_processing_job_transition" in sql
+    assert "before insert or update on public.processing_jobs" in sql
+    assert "new processing jobs must start in queued state" in sql
+    assert "processing job owner must match preflight owner" in sql
+    assert "catalog preflight snapshots are immutable" in sql
 
 
 def test_missing_supabase_configuration_has_no_in_memory_fallback(monkeypatch: pytest.MonkeyPatch) -> None:

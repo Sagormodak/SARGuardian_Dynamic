@@ -1,8 +1,18 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap');
 
 :root {
+  --sg-ocean: #155979;
+  --sg-deep: #0b3c54;
+  --sg-navy: #071d2c;
+  --sg-panel: rgba(7, 36, 51, .9);
+  --sg-control: #0b3042;
+  --sg-border: rgba(173, 230, 239, .26);
+  --sg-accent: #48e1dc;
+  --sg-text: #f7fbff;
+  --sg-muted: #b4cbd6;
+  --sg-radius: 14px;
   color: #f7fbff;
-  background: #0b3c54;
+  background: var(--sg-deep);
   font-family: 'DM Sans', sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -10,17 +20,19 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #root { height: 100%; margin: 0; }
-body { min-width: 320px; overflow: hidden; }
+html, body { min-height: 100%; margin: 0; }
+#root { min-height: 100vh; }
+body { min-width: 320px; overflow-x: hidden; overflow-y: auto; }
 button, a { font: inherit; }
 button { color: inherit; }
 
 .home-page {
   position: relative;
   isolation: isolate;
-  min-height: 100vh;
-  overflow: hidden;
-  background: #155979;
+  min-height: 100dvh;
+  overflow-x: clip;
+  overflow-y: visible;
+  background: var(--sg-ocean);
 }
 
 .environment-layer,
@@ -247,7 +259,6 @@ button { color: inherit; }
 }
 
 @media (max-width: 760px) {
-  .home-page { overflow: auto; }
   .site-header { grid-template-columns: 1fr auto; padding-top: 20px; gap: 13px; }
   .main-nav { grid-column: 1 / -1; grid-row: 2; justify-content: center; overflow-x: auto; width: 100%; }
   .nav-link { min-width: 56px; padding-inline: 9px; font-size: 11px; }
