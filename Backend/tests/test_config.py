@@ -67,3 +67,17 @@ def test_production_settings_require_server_supabase_configuration() -> None:
         assert str(error) == "SUPABASE_URL must be configured in production."
     else:
         raise AssertionError("production validation unexpectedly accepted missing Supabase settings")
+
+
+def test_enabled_displacement_actions_requires_server_only_settings() -> None:
+    settings = config.get_settings({
+        "APP_ENV": "production", "CORS_ORIGINS": "https://app.example.test",
+        "SUPABASE_URL": "https://project.supabase.co", "SUPABASE_SERVICE_ROLE_KEY": "sb_secret_test_only",
+        "DISPLACEMENT_ACTIONS_ENABLED": "true",
+    })
+    try:
+        config.validate_production_settings(settings)
+    except config.SettingsError as error:
+        assert "GITHUB_ACTIONS_TOKEN" in str(error)
+    else:
+        raise AssertionError("enabled Actions integration unexpectedly accepted missing settings")

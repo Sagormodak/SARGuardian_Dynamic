@@ -2179,7 +2179,7 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
       {isResultsPage && renderResultsPage()}
       {isDisplacementPage && <div className="nisar-results-page">
         {renderWorkspaceHeader('DISPLACEMENT PREPARATION', 'Selected AOI and time window', 'Back to map', onBackToMap)}
-        <DisplacementPreparation preparation={catalogValidation} onBack={onBackToMap} />
+        <DisplacementPreparation preparation={catalogValidation} onBack={onBackToMap} user={user} />
       </div>}
     </div>
   );

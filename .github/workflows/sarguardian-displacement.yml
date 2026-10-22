@@ -1,0 +1,199 @@
+name: SARGuardian displacement processing
+
+run-name: Displacement ${{ inputs.job_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: Durable SARGuardian Dynamic displacement job UUID
+        required: true
+        type: string
+      aoi_wkt:
+        description: Single-ring EPSG:4326 POLYGON WKT
+        required: true
+        type: string
+      start_date:
+        description: Inclusive YYYY-MM-DD acquisition window start
+        required: true
+        type: string
+      end_date:
+        description: Inclusive YYYY-MM-DD acquisition window end
+        required: true
+        type: string
+      callback_url:
+        description: Trusted public SARGuardian Dynamic API URL
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sarguardian-displacement
+  cancel-in-progress: false
+
+jobs:
+  process:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      JOB_ID: ${{ inputs.job_id }}
+      AOI_WKT: ${{ inputs.aoi_wkt }}
+      START_DATE: ${{ inputs.start_date }}
+      END_DATE: ${{ inputs.end_date }}
+      CALLBACK_URL: ${{ inputs.callback_url }}
+      CALLBACK_SECRET: ${{ secrets.DISPLACEMENT_CALLBACK_SECRET }}
+      EARTHDATA_USERNAME: ${{ secrets.EARTHDATA_USERNAME }}
+      EARTHDATA_PASSWORD: ${{ secrets.EARTHDATA_PASSWORD }}
+      SARGUARDIAN_WORK_DIR: ${{ runner.temp }}/sarguardian-displacement-${{ inputs.job_id }}
+    steps:
+      - name: Checkout Dynamic workflow revision
+        uses: actions/checkout@v4
+
+      - name: Checkout pinned original science source
+        uses: actions/checkout@v4
+        with:
+          repository: moshiour0/SARGuardian
+          ref: 10639a916c9829850775410b3ed7de62e527770d
+          path: science-source
+
+      - name: Verify dynamic AOI science capability
+        run: |
+          mkdir -p "$SARGUARDIAN_WORK_DIR"
+          test -f science-source/src/aoi_wkt.py
+          test -f science-source/src/gunw_reader.py
+          test -f science-source/src/goff_reader.py
+          test -n "$CALLBACK_URL"
+          test -n "$CALLBACK_SECRET"
+          test -n "$EARTHDATA_USERNAME"
+          test -n "$EARTHDATA_PASSWORD"
+
+      - name: Set up pinned science runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install pinned science dependencies
+        run: python -m pip install --disable-pip-version-check --no-cache-dir --requirement science-source/requirements.txt
+
+      - name: Report running state
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -cn --arg state running --arg stage initializing --argjson sequence 1 --arg run_id "$GITHUB_RUN_ID" --arg run_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" '{state:$state,stage:$stage,sequence:$sequence,github_run_id:$run_id,github_run_url:$run_url}')"
+          signature="sha256=$(printf '%s' "$payload" | openssl dgst -sha256 -hmac "$CALLBACK_SECRET" -hex | sed 's/^.* //')"
+          curl --fail-with-body --retry 3 --retry-delay 3 -X POST "$CALLBACK_URL/api/displacement-jobs/$JOB_ID/callback" -H 'Content-Type: application/json' -H "X-SARGuardian-Signature: $signature" --data "$payload"
+          touch "$SARGUARDIAN_WORK_DIR/running-callback-ack"
+
+      - name: Report science-processing stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(jq -cn --arg state running --arg stage science_processing --argjson sequence 2 --arg run_id "$GITHUB_RUN_ID" --arg run_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" '{state:$state,stage:$stage,sequence:$sequence,github_run_id:$run_id,github_run_url:$run_url}')"
+          signature="sha256=$(printf '%s' "$payload" | openssl dgst -sha256 -hmac "$CALLBACK_SECRET" -hex | sed 's/^.* //')"
+          curl --fail-with-body --retry 3 --retry-delay 3 -X POST "$CALLBACK_URL/api/displacement-jobs/$JOB_ID/callback" -H 'Content-Type: application/json' -H "X-SARGuardian-Signature: $signature" --data "$payload"
+          touch "$SARGUARDIAN_WORK_DIR/processing-callback-ack"
+
+      - name: Run AOI/date-driven scientific adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          python "$GITHUB_WORKSPACE/Backend/science_adapter/run_displacement.py" \
+            --job-id "$JOB_ID" --aoi-wkt "$AOI_WKT" \
+            --start-date "$START_DATE" --end-date "$END_DATE" \
+            --science-root "$GITHUB_WORKSPACE/science-source" \
+            --work-dir "$SARGUARDIAN_WORK_DIR" \
+            --max-download-gib "${SARGUARDIAN_MAX_DOWNLOAD_GIB:-20}"
+          test -s "$SARGUARDIAN_WORK_DIR/result-manifest.json"
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = json.loads((Path(os.environ["SARGUARDIAN_WORK_DIR"]) / "result-manifest.json").read_text(encoding="utf-8"))
+          required = {
+              "job_id": os.environ["JOB_ID"],
+              "status": "succeeded",
+              "science_source_repository": "moshiour0/SARGuardian",
+              "science_source_ref": "10639a916c9829850775410b3ed7de62e527770d",
+              "aoi_wkt_sha256": hashlib.sha256(os.environ["AOI_WKT"].encode("utf-8")).hexdigest(),
+              "start_date": os.environ["START_DATE"],
+              "end_date": os.environ["END_DATE"],
+          }
+          if not isinstance(manifest, dict) or any(manifest.get(key) != value for key, value in required.items()):
+              raise SystemExit("result-manifest.json does not prove this dynamic science run completed.")
+          outputs = manifest.get("validated_outputs")
+          if not isinstance(outputs, list) or not outputs:
+              raise SystemExit("result-manifest.json has no validated scientific outputs.")
+          root = Path(os.environ["SARGUARDIAN_WORK_DIR"])
+          for output in outputs:
+              if not isinstance(output, dict) or not isinstance(output.get("path"), str) or not isinstance(output.get("sha256"), str):
+                  raise SystemExit("result-manifest.json has an invalid validated output entry.")
+              candidate = (root / output["path"]).resolve()
+              if root not in candidate.parents or not candidate.is_file():
+                  raise SystemExit("A validated output is missing or outside the isolated job directory.")
+              digest = hashlib.sha256(candidate.read_bytes()).hexdigest()
+              if digest != output["sha256"]:
+                  raise SystemExit("A validated output checksum does not match its manifest.")
+          PY
+
+      - name: Upload verified result manifest
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: displacement-result-${{ inputs.job_id }}
+          path: ${{ runner.temp }}/sarguardian-displacement-${{ inputs.job_id }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Remove downloaded raw NISAR data
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          incoming="$GITHUB_WORKSPACE/science-source/data/nisar_l2/_incoming"
+          if [ -d "$incoming" ]; then
+            find "$incoming" -maxdepth 1 -type f -name 'NISAR_*.h5' -delete
+          fi
+
+      - name: Report terminal state
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "$SARGUARDIAN_WORK_DIR/processing-callback-ack" ] && [ "$JOB_STATUS" = success ]; then
+            state=succeeded
+            stage=completed
+            code=''
+            message=''
+          else
+            state=failed
+            stage=failed
+            code=GITHUB_ACTIONS_WORKER_FAILED
+            message='The GitHub Actions science workflow did not complete successfully.'
+          fi
+          if [ -f "$SARGUARDIAN_WORK_DIR/processing-callback-ack" ]; then sequence=3; elif [ -f "$SARGUARDIAN_WORK_DIR/running-callback-ack" ]; then sequence=2; else sequence=1; fi
+          if [ "$state" = succeeded ]; then
+            summary="$(jq -c '{analysis_type,scientific_limit,selected_product_count,estimated_download_gib,products}' "$SARGUARDIAN_WORK_DIR/result-manifest.json")"
+            artifact_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          else
+            summary='null'
+            artifact_url=''
+          fi
+          payload="$(jq -cn --arg state "$state" --arg stage "$stage" --argjson sequence "$sequence" --arg run_id "$GITHUB_RUN_ID" --arg run_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --arg code "$code" --arg message "$message" --arg artifact_url "$artifact_url" --argjson result_summary "$summary" '{state:$state,stage:$stage,sequence:$sequence,github_run_id:$run_id,github_run_url:$run_url,error_code:$code,error_message:$message,artifact_url:$artifact_url,result_summary:$result_summary}')"
+          signature="sha256=$(printf '%s' "$payload" | openssl dgst -sha256 -hmac "$CALLBACK_SECRET" -hex | sed 's/^.* //')"
+          curl --fail-with-body --retry 3 --retry-delay 3 -X POST "$CALLBACK_URL/api/displacement-jobs/$JOB_ID/callback" -H 'Content-Type: application/json' -H "X-SARGuardian-Signature: $signature" --data "$payload"
+        env:
+          JOB_STATUS: ${{ job.status }}
+
+      - name: Remove isolated scientific workspace
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$SARGUARDIAN_WORK_DIR" in
+            "$RUNNER_TEMP"/sarguardian-displacement-*) rm -rf -- "$SARGUARDIAN_WORK_DIR" ;;
+            *) echo 'Refusing to remove an unexpected workspace path.' >&2; exit 1 ;;
+          esac

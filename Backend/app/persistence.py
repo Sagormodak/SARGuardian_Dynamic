@@ -60,6 +60,11 @@ class JobStore(Protocol):
     def create_job(self, values: dict[str, Any]) -> dict[str, Any]: ...
     def list_jobs(self, owner_uid: str, limit: int = 100) -> list[dict[str, Any]]: ...
     def get_job(self, owner_uid: str, job_id: UUID) -> dict[str, Any] | None: ...
+    def get_displacement_job_by_idempotency(self, owner_uid: str, idempotency_key: str) -> dict[str, Any] | None: ...
+    def create_displacement_job(self, values: dict[str, Any]) -> dict[str, Any]: ...
+    def get_displacement_job(self, owner_uid: str, job_id: UUID) -> dict[str, Any] | None: ...
+    def get_displacement_job_unscoped(self, job_id: UUID) -> dict[str, Any] | None: ...
+    def update_displacement_job(self, job_id: UUID, values: dict[str, Any]) -> dict[str, Any]: ...
 
 
 def request_fingerprint(request_snapshot: dict[str, Any], manifest_snapshot: dict[str, Any]) -> str:
@@ -171,6 +176,56 @@ class SupabaseJobStore:
             raise PersistenceError("Could not read the processing job.") from None
         rows = self._data(response)
         return rows[0] if rows else None
+
+    def get_displacement_job_by_idempotency(self, owner_uid: str, idempotency_key: str) -> dict[str, Any] | None:
+        try:
+            response = self.client.table("displacement_jobs").select("*").eq("owner_uid", owner_uid).eq("idempotency_key", idempotency_key).limit(1).execute()
+        except Exception:
+            raise PersistenceError("Could not check displacement job idempotency.") from None
+        rows = self._data(response)
+        return rows[0] if rows else None
+
+    def create_displacement_job(self, values: dict[str, Any]) -> dict[str, Any]:
+        existing = self.get_displacement_job_by_idempotency(values["owner_uid"], values["idempotency_key"])
+        if existing:
+            return existing
+        try:
+            response = self.client.table("displacement_jobs").insert(values).select("*").execute()
+        except Exception:
+            existing = self.get_displacement_job_by_idempotency(values["owner_uid"], values["idempotency_key"])
+            if existing:
+                return existing
+            raise PersistenceError("Could not persist the displacement job.") from None
+        rows = self._data(response)
+        if not rows:
+            raise PersistenceError("Displacement job persistence returned no record.")
+        return rows[0]
+
+    def get_displacement_job(self, owner_uid: str, job_id: UUID) -> dict[str, Any] | None:
+        try:
+            response = self.client.table("displacement_jobs").select("*").eq("owner_uid", owner_uid).eq("id", str(job_id)).limit(1).execute()
+        except Exception:
+            raise PersistenceError("Could not read the displacement job.") from None
+        rows = self._data(response)
+        return rows[0] if rows else None
+
+    def get_displacement_job_unscoped(self, job_id: UUID) -> dict[str, Any] | None:
+        try:
+            response = self.client.table("displacement_jobs").select("*").eq("id", str(job_id)).limit(1).execute()
+        except Exception:
+            raise PersistenceError("Could not read the displacement job.") from None
+        rows = self._data(response)
+        return rows[0] if rows else None
+
+    def update_displacement_job(self, job_id: UUID, values: dict[str, Any]) -> dict[str, Any]:
+        try:
+            response = self.client.table("displacement_jobs").update(values).eq("id", str(job_id)).select("*").execute()
+        except Exception:
+            raise PersistenceError("Could not update the displacement job.") from None
+        rows = self._data(response)
+        if not rows:
+            raise PersistenceError("Displacement job was not found for update.")
+        return rows[0]
 
 
 @lru_cache(maxsize=1)

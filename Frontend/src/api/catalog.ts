@@ -72,6 +72,23 @@ export type ProcessingJob = {
   updated_at: string;
 };
 
+export type DisplacementJob = {
+  id: string;
+  state: ProcessingJobState;
+  aoi_wkt: string;
+  start_date: string;
+  end_date: string;
+  stage: string;
+  github_run_id?: string | null;
+  github_run_url?: string | null;
+  error_code?: string | null;
+  error_message?: string | null;
+  result_summary?: Record<string, unknown> | null;
+  artifact_url?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 const configuredApiUrl = (import.meta.env.VITE_SARGUARDIAN_API_URL as string | undefined)?.trim();
 const API_BASE = (configuredApiUrl || 'http://localhost:8000').replace(/\/+$/, '');
 
@@ -177,6 +194,28 @@ export async function getProcessingJob(jobId: string, user: Pick<User, 'getIdTok
     `${API_BASE}/api/jobs/${encodeURIComponent(safeId)}`,
     user,
     'Could not load the selected processing job.',
+  );
+}
+
+export async function createDisplacementJob(
+  input: { aoiWkt: string; startDate: string; endDate: string; idempotencyKey: string },
+  user: Pick<User, 'getIdToken'> | null,
+): Promise<DisplacementJob> {
+  return readAuthenticatedPayload<DisplacementJob>(
+    `${API_BASE}/api/displacement-jobs`, user, 'Could not submit the displacement job.', {
+      method: 'POST',
+      body: JSON.stringify({ aoi_wkt: input.aoiWkt, start_date: input.startDate, end_date: input.endDate, idempotency_key: input.idempotencyKey }),
+    },
+  );
+}
+
+export async function getDisplacementJob(jobId: string, user: Pick<User, 'getIdToken'> | null): Promise<DisplacementJob> {
+  const safeId = jobId.trim();
+  if (!safeId) throw new Error('A displacement job ID is required.');
+  return readAuthenticatedPayload<DisplacementJob>(
+    `${API_BASE}/api/displacement-jobs/${encodeURIComponent(safeId)}`,
+    user,
+    'Could not refresh the displacement job.',
   );
 }
 

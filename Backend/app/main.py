@@ -15,6 +15,16 @@ from .asf_catalog import ASFAdapterError, ASFAdapterNotConfigured, normalize_pro
 from .auth import get_current_user
 from .config import SettingsError, get_settings, validate_production_settings
 from .jobs import CreateJobRequest, JobResponse, JobState
+from .displacements import (
+    CreateDisplacementJobRequest,
+    DisplacementJobResponse,
+    GitHubDispatchError,
+    WorkerCallback,
+    callback_signature_is_valid,
+    dispatch_workflow,
+    is_dispatch_timed_out,
+    workflow_run_status,
+)
 from .models import CatalogResponse, CatalogSearchRequest
 from .persistence import (
     PersistenceConfigurationError,
@@ -230,6 +240,10 @@ def _job_response(record: dict) -> JobResponse:
     return JobResponse.model_validate(record)
 
 
+def _displacement_response(record: dict) -> DisplacementJobResponse:
+    return DisplacementJobResponse.model_validate(record)
+
+
 @app.post("/api/jobs", response_model=JobResponse)
 def create_job(request: CreateJobRequest, user: dict = Depends(get_current_user)) -> JobResponse:
     owner_uid = _required_owner_uid(user)
@@ -293,6 +307,131 @@ def get_job(job_id: UUID, user: dict = Depends(get_current_user)) -> JobResponse
     if not record:
         raise HTTPException(status_code=404, detail="Processing job was not found for this user.")
     return _job_response(record)
+
+
+@app.post("/api/displacement-jobs", response_model=DisplacementJobResponse)
+def create_displacement_job(request: CreateDisplacementJobRequest, user: dict = Depends(get_current_user)) -> DisplacementJobResponse:
+    if request.end_date < request.start_date:
+        raise HTTPException(status_code=422, detail="end_date must be on or after start_date.")
+    if (request.end_date - request.start_date).days > MAX_DATE_WINDOW_DAYS:
+        raise HTTPException(status_code=422, detail=f"Date range cannot exceed {MAX_DATE_WINDOW_DAYS} days.")
+    if request.end_date > date.today():
+        raise HTTPException(status_code=422, detail="end_date cannot be in the future.")
+    owner_uid = _required_owner_uid(user)
+    store = _require_store()
+    try:
+        existing = store.get_displacement_job_by_idempotency(owner_uid, request.idempotency_key)
+    except PersistenceError:
+        raise HTTPException(status_code=503, detail="Could not check displacement job persistence.") from None
+    if existing:
+        return _displacement_response(existing)
+    values = {
+        "owner_uid": owner_uid,
+        "idempotency_key": request.idempotency_key,
+        "state": JobState.QUEUED.value,
+        "aoi_wkt": request.aoi_wkt,
+        "start_date": request.start_date.isoformat(),
+        "end_date": request.end_date.isoformat(),
+        "stage": "queued",
+    }
+    try:
+        record = store.create_displacement_job(values)
+    except PersistenceError:
+        raise HTTPException(status_code=503, detail="Could not persist the displacement job.") from None
+    job_id = UUID(str(record["id"]))
+    try:
+        dispatch_workflow(get_settings(), job_id, request)
+        record = store.update_displacement_job(job_id, {"state": JobState.DISPATCHING.value, "stage": "dispatching"})
+    except GitHubDispatchError as exc:
+        logger.warning("Displacement dispatch failed for job %s: %s", job_id, exc)
+        try:
+            record = store.update_displacement_job(job_id, {
+                "state": JobState.FAILED.value,
+                "stage": "dispatch_failed",
+                "error_code": "GITHUB_DISPATCH_FAILED",
+                "error_message": str(exc),
+            })
+        except PersistenceError:
+            raise HTTPException(status_code=503, detail="Displacement dispatch failed and its status could not be persisted.") from None
+    except PersistenceError:
+        raise HTTPException(status_code=503, detail="GitHub Actions accepted the job but its dispatch status could not be persisted.") from None
+    return _displacement_response(record)
+
+
+@app.get("/api/displacement-jobs/{job_id}", response_model=DisplacementJobResponse)
+def get_displacement_job(job_id: UUID, user: dict = Depends(get_current_user)) -> DisplacementJobResponse:
+    store = _require_store()
+    try:
+        record = store.get_displacement_job(_required_owner_uid(user), job_id)
+    except PersistenceError:
+        raise HTTPException(status_code=503, detail="Could not read the displacement job.") from None
+    if not record:
+        raise HTTPException(status_code=404, detail="Displacement job was not found for this user.")
+    settings = get_settings()
+    if is_dispatch_timed_out(record, settings.displacement_dispatch_timeout_seconds):
+        try:
+            record = store.update_displacement_job(job_id, {"state": JobState.FAILED.value, "stage": "start_timeout", "error_code": "WORKFLOW_START_TIMEOUT", "error_message": "The workflow did not report a start before the configured timeout."})
+        except PersistenceError:
+            raise HTTPException(status_code=503, detail="Could not persist the workflow timeout.") from None
+    elif settings.displacement_actions_enabled and record.get("github_run_id") and record.get("state") == JobState.RUNNING.value:
+        status = workflow_run_status(settings, str(record["github_run_id"]))
+        if status and status[0] == "completed":
+            code = "WORKER_CALLBACK_MISSING" if status[1] == "success" else "GITHUB_ACTIONS_WORKER_FAILED"
+            message = "GitHub Actions completed without a verified success callback." if status[1] == "success" else "GitHub Actions reported a terminal worker failure."
+            try:
+                record = store.update_displacement_job(job_id, {"state": JobState.FAILED.value, "stage": "terminal_validation_failed", "error_code": code, "error_message": message})
+            except PersistenceError:
+                raise HTTPException(status_code=503, detail="Could not persist the terminal worker state.") from None
+    return _displacement_response(record)
+
+
+@app.post("/api/displacement-jobs/{job_id}/callback")
+async def update_displacement_job_from_worker(job_id: UUID, request: Request) -> dict[str, str]:
+    body = await request.body()
+    settings = get_settings()
+    if not callback_signature_is_valid(settings.displacement_callback_secret, body, request.headers.get("X-SARGuardian-Signature")):
+        raise HTTPException(status_code=401, detail="Invalid worker callback signature.")
+    try:
+        payload = WorkerCallback.model_validate_json(body)
+        store = _require_store()
+        record = store.get_displacement_job_unscoped(job_id)
+    except PersistenceError:
+        raise HTTPException(status_code=503, detail="Could not read worker job state.") from None
+    if not record:
+        raise HTTPException(status_code=404, detail="Displacement job was not found.")
+    current = JobState(record["state"])
+    target = JobState(payload.state)
+    stored_sequence = int(record.get("callback_sequence") or 0)
+    stored_run_id = record.get("github_run_id")
+    if payload.sequence < stored_sequence:
+        raise HTTPException(status_code=409, detail="Stale worker callback sequence.")
+    if payload.sequence == stored_sequence:
+        if current == target and stored_run_id == payload.github_run_id and record.get("stage") == payload.stage:
+            return {"status": "accepted", "job_id": str(job_id), "job_status": current.value}
+        raise HTTPException(status_code=409, detail="Duplicate worker callback does not match the recorded event.")
+    if payload.sequence != stored_sequence + 1:
+        raise HTTPException(status_code=409, detail="Worker callback sequence is out of order.")
+    if stored_run_id and stored_run_id != payload.github_run_id:
+        raise HTTPException(status_code=409, detail="Worker callback run does not match the recorded workflow run.")
+    if target == JobState.SUCCEEDED and current != JobState.RUNNING:
+        raise HTTPException(status_code=409, detail="A result cannot be accepted before the worker reports running.")
+    allowed = {
+        (JobState.DISPATCHING, JobState.RUNNING), (JobState.DISPATCHING, JobState.FAILED),
+        (JobState.RUNNING, JobState.RUNNING), (JobState.RUNNING, JobState.SUCCEEDED), (JobState.RUNNING, JobState.FAILED),
+    }
+    if (current, target) not in allowed:
+        raise HTTPException(status_code=409, detail="Worker callback requested an invalid state transition.")
+    try:
+        updated = store.update_displacement_job(job_id, {
+            "state": target.value, "github_run_id": payload.github_run_id,
+            "github_run_url": payload.github_run_url, "error_code": payload.error_code if target == JobState.FAILED else None,
+            "error_message": payload.error_message if target == JobState.FAILED else None, "callback_sequence": payload.sequence,
+            "stage": payload.stage, "result_summary": payload.result_summary if target == JobState.SUCCEEDED else None,
+            "artifact_url": payload.artifact_url if target == JobState.SUCCEEDED else None,
+        })
+    except PersistenceError:
+        raise HTTPException(status_code=503, detail="Could not persist worker job state.") from None
+    return {"status": "accepted", "job_id": str(job_id), "job_status": updated["state"]}
 
 
 if __name__ == "__main__":
