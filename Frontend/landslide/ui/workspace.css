@@ -141,7 +141,6 @@
 .mode-icon svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.6; }
 .landslide-route-shell .investigation-mode-card .investigate-button { grid-column: 1 / -1; grid-row: auto; width: 100%; align-self: end; margin-top: 1px; white-space: normal; }
 .investigation-mode-card:focus-within { border-color: var(--sg-accent); }
-.mode-help { color: var(--sg-muted); font-size: 12px; line-height: 1.5; margin: 0 0 10px; }
 .preparation-dates { display: flex; flex-wrap: wrap; gap: 32px; margin-top: 24px; }
 .preparation-dates dt { color: var(--sg-muted); font-size: 12px; }
 .preparation-dates dd { margin: 6px 0 0; }
@@ -166,7 +165,6 @@
 .landslide-route-shell .dataset-selector select { min-width: 0; width: 100%; max-width: none; min-height: 40px; background: var(--sg-control); border-color: var(--sg-border); font-size: 12px; }
 .landslide-route-shell .action-buttons { display: contents; }
 .landslide-route-shell .action-buttons .investigate-button { min-width: 0; width: 100%; }
-.landslide-route-shell .catalog-map-result-link { min-width: 0; flex-wrap: wrap; border-color: var(--sg-border); background: var(--sg-control); }
 .landslide-route-shell .validation-toast {
   position: relative;
   z-index: 7;
@@ -203,6 +201,11 @@
 .landslide-route-shell .nisar-results-summary p { color: var(--sg-muted); }
 .landslide-route-shell .nisar-results-workflow { gap: 20px; }
 .landslide-route-shell .catalog-preflight { padding: 20px; }
+.landslide-route-shell .catalog-family-toggle { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; margin: 16px 0 0; }
+.landslide-route-shell .catalog-family-toggle > span { width: 100%; color: var(--sg-muted); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-align: right; text-transform: uppercase; }
+.landslide-route-shell .catalog-family-toggle button { min-width: 72px; padding: 7px 10px; border: 1px solid var(--sg-border); border-radius: 7px; background: var(--sg-control); color: var(--sg-text); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.landslide-route-shell .catalog-family-toggle button[aria-pressed="true"] { border-color: var(--sg-accent); background: linear-gradient(135deg, #6ee4d4, #35b7ce); color: #062131; }
+.landslide-route-shell .catalog-family-toggle button:disabled { cursor: wait; opacity: .68; }
 .landslide-route-shell .result-kicker { color: var(--sg-accent); }
 .landslide-route-shell .catalog-product-main { flex: 1; }
 .landslide-route-shell .catalog-product-main strong { white-space: normal; overflow-wrap: anywhere; max-width: none; font-size: 12px; }
@@ -262,6 +265,8 @@
   .landslide-route-shell .nisar-results-summary,
   .landslide-route-shell .catalog-preflight { padding: 16px; }
   .landslide-route-shell .catalog-preflight-heading { flex-wrap: wrap; }
+  .landslide-route-shell .catalog-family-toggle { justify-content: flex-start; }
+  .landslide-route-shell .catalog-family-toggle > span { text-align: left; }
 }
 @media (prefers-reduced-motion: reduce) {
   .landslide-route-shell button { transition: none; }

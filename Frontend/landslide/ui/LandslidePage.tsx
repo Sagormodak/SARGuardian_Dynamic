@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { importLibrary, setOptions } from '@googlemaps/js-api-loader';
 import type { User } from 'firebase/auth';
 import { analyzeGunwAoiQuality, createQueuedJob, getNisarHarmonyJobStatus, getProcessingJob, inspectNisarAoiWindow, listProcessingJobs, searchNisarCatalog, startGunwQualityLayers, startNisarHarmonyLayerJob, verifyGunwNativeSourceMask } from '../../src/api/catalog';
-import type { AoiWindowResponse, CatalogProduct, CatalogResponse, GunwQualityAnalysisResponse, HarmonyLayerRole, HarmonyQualityLayerBundle, HarmonyQualityLayerJob, NativeSourceMaskVerificationResponse, ProcessingJob, SubmittedHarmonyLayerJob } from '../../src/api/catalog';
+import type { AoiWindowResponse, CatalogProduct, CatalogResponse, GunwQualityAnalysisResponse, HarmonyLayerRole, HarmonyQualityLayerBundle, HarmonyQualityLayerJob, NativeSourceMaskVerificationResponse, NisarProductType, ProcessingJob, SubmittedHarmonyLayerJob } from '../../src/api/catalog';
 import { calculateGeodesicAreaKm2, canSubmitCatalogPreflight, validatePolyline } from '../engine/validation';
 import { prepareInvestigation } from '../engine/investigation';
 import { DisplacementPreparation } from './DisplacementPreparation';
@@ -1031,7 +1031,7 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
   const mapTypeListenerRef = useRef<google.maps.MapsEventListener | null>(null);
   const [profileImageFailed, setProfileImageFailed] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
-  const productType = 'GUNW' as const;
+  const [productType, setProductType] = useState<NisarProductType>(() => initialSessionState.catalogResult?.query.product_type ?? 'GUNW');
   const [catalogResult, setCatalogResult] = useState<CatalogResponse | null>(initialSessionState.catalogResult);
   const [isCatalogLoading, setIsCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState('');
@@ -1164,7 +1164,6 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
     endDate: windowEnd,
     today,
   });
-  const catalogEligible = catalogValidation.valid;
   const selectionKey = JSON.stringify([coordinates, areaClosed, windowStart, windowEnd]);
   const currentSelectionKey = useRef(selectionKey);
   currentSelectionKey.current = selectionKey;
@@ -1447,7 +1446,7 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
     setHarmonySubmitMessage('Product selected. Review the metadata before any separate processing workflow.');
   };
 
-  const runCatalogPreflight = async () => {
+  const runCatalogPreflight = async (requestedProductType: NisarProductType = productType, keepCurrentResults = false) => {
     if (catalogInFlightRef.current) return;
     if (!catalogValidation.valid) {
       setValidationAlertDismissed(false);
@@ -1468,15 +1467,16 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
     setAoiWindowResult(null);
     setAoiWindowError('');
     setIsCatalogLoading(true);
-    setCatalogResult(null);
+    if (!keepCurrentResults) setCatalogResult(null);
     try {
       const response = await searchNisarCatalog({
         coordinates: [...coordinates, coordinates[0]],
         startDate: windowStart,
         endDate: windowEnd,
-        productType,
+        productType: requestedProductType,
       }, user);
       if (currentSelectionKey.current !== requestedSelectionKey) return;
+      setProductType(response.query.product_type);
       setCatalogResult(response);
       onResults();
     } catch (error) {
@@ -1488,6 +1488,11 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
       catalogInFlightRef.current = false;
       setIsCatalogLoading(false);
     }
+  };
+
+  const switchCatalogProductType = (nextProductType: NisarProductType) => {
+    if (nextProductType === productType || isCatalogLoading) return;
+    void runCatalogPreflight(nextProductType, true);
   };
 
   const submitSelectedHarmonyLayer = async () => {
@@ -1995,6 +2000,20 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
                   <h1 id="nisar-results-heading">NISAR Catalogue Results</h1>
                   <p>{catalogResult.message}</p>
                 </div>
+                <div className="catalog-family-toggle" role="group" aria-label="NISAR product family">
+                  <span>Product family</span>
+                  {(['GUNW', 'GOFF'] as const).map((family) => (
+                    <button
+                      key={family}
+                      type="button"
+                      aria-pressed={productType === family}
+                      disabled={isCatalogLoading}
+                      onClick={() => switchCatalogProductType(family)}
+                    >
+                      {isCatalogLoading && productType !== family ? `Loading ${family}…` : family}
+                    </button>
+                  ))}
+                </div>
                 <div className="nisar-summary-grid">
                   <div><span>Status</span><strong>{catalogResult.status}</strong></div>
                   <div><span>Matching products</span><strong>{catalogResult.product_count}</strong></div>
@@ -2125,26 +2144,19 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
 
               <section className="investigation-modes" aria-labelledby="investigation-mode-title">
                 <h2 id="investigation-mode-title">Choose Investigation Mode</h2>
-                {!catalogEligible && <p id="investigation-mode-help" className="mode-help">{!catalogValidation.valid && catalogValidation.errors.join(' ')}</p>}
                 <div className="investigation-mode-cards">
                   <article className="investigation-mode-card archive-mode">
                     <span className="mode-icon" aria-hidden="true"><Icon name="layers" /></span>
                     <h3>Single Product Investigation</h3>
-                    <button className="investigate-button" type="button" aria-describedby={!catalogEligible ? 'investigation-mode-help' : undefined} disabled={!canSubmitCatalogPreflight(catalogValidation, isCatalogLoading)} onClick={runCatalogPreflight}>{isCatalogLoading ? 'Checking ASF...' : 'Explore NISAR Archive'}</button>
+                    <button className="investigate-button" type="button" disabled={!canSubmitCatalogPreflight(catalogValidation, isCatalogLoading)} onClick={() => void runCatalogPreflight()}>{isCatalogLoading ? 'Checking ASF...' : 'Explore NISAR Archive'}</button>
                   </article>
                   <article className="investigation-mode-card displacement-mode">
                     <span className="mode-icon" aria-hidden="true"><Icon name="locate" /></span>
                     <h3>Find Displacements</h3>
-                    <button className="investigate-button" type="button" aria-describedby={!catalogEligible ? 'investigation-mode-help' : undefined} disabled={!canSubmitCatalogPreflight(catalogValidation, isCatalogLoading)} onClick={openDisplacements}>Find Displacements</button>
+                    <button className="investigate-button" type="button" disabled={!canSubmitCatalogPreflight(catalogValidation, isCatalogLoading)} onClick={openDisplacements}>Find Displacements</button>
                   </article>
                 </div>
               </section>
-              {catalogResult && (
-                <div className="catalog-map-result-link" aria-live="polite">
-                  <span>{catalogResult.product_count} {catalogResult.query.product_type} product{catalogResult.product_count === 1 ? '' : 's'} found.</span>
-                  <button className="investigate-button" type="button" onClick={onResults}>View NISAR results</button>
-                </div>
-              )}
             </>
           ) : (
             <ResultPanel result={result} onReset={() => setResult(null)} />

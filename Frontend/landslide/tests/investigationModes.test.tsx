@@ -27,6 +27,8 @@ describe('investigation mode state integration', () => {
     expect(cards[1]).toContain('Find Displacements');
     expect(cards[0]).not.toContain('Explore available NISAR products for your selected area and time window.');
     expect(cards[1]).not.toContain('Prepare your selected AOI and time window for displacement analysis.');
+    expect(map).not.toContain('class="mode-help"');
+    expect(map).not.toContain('View NISAR results');
     const preparation = render(true);
     expect(preparation).toContain('POLYGON((85.3 27.7, 85.301 27.7, 85.301 27.701, 85.3 27.7))');
     expect(preparation).toContain('2026-10-22');
