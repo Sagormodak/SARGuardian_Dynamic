@@ -1,5 +1,10 @@
 export const LANDSLIDE_PATH = '/landslide';
 export const LANDSLIDE_RESULTS_PATH = '/landslide/results';
+export const LANDSLIDE_DISPLACEMENT_PATH = '/landslide/displacements';
+
+export function isLandslideDisplacementRoute(pathname: string): boolean {
+  return normalizePathname(pathname) === LANDSLIDE_DISPLACEMENT_PATH;
+}
 
 export function normalizePathname(pathname: string): string {
   const pathOnly = pathname.split(/[?#]/, 1)[0];

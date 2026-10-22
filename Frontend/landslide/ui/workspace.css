@@ -117,10 +117,10 @@
   bottom: 28px;
   padding: 16px;
   grid-template-columns: minmax(180px, .8fr) minmax(240px, 1fr) minmax(180px, auto);
-  grid-template-areas: 'summary drawing drawing' 'time time primary';
+  grid-template-areas: 'summary drawing drawing' 'time time time' 'modes modes modes';
   gap: 12px 16px;
   align-items: center;
-  max-height: min(38dvh, 270px);
+  max-height: min(60dvh, 480px);
 }
 .landslide-route-shell .aoi-controls-stack {
   position: absolute;
@@ -131,7 +131,22 @@
   display: grid;
   gap: 10px;
 }
-.landslide-route-shell .aoi-controls-stack .action-bar { position: relative; inset: auto; width: 100%; }
+.landslide-route-shell .aoi-controls-stack .action-bar { position: relative; inset: auto; }
+.landslide-route-shell .investigation-modes { grid-area: modes; min-width: 0; }
+.investigation-modes h2 { margin: 0 0 8px; font-size: 14px; color: var(--sg-text); }
+.investigation-mode-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.investigation-mode-card { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 8px; padding: 10px 12px; border: 1px solid var(--sg-border); border-radius: 12px; background: linear-gradient(135deg, rgba(38, 139, 153, .16), rgba(6, 33, 49, .65)); }
+.investigation-mode-card h3 { margin: 0; align-self: center; font-size: 14px; }
+.investigation-mode-card .mode-icon { color: var(--sg-accent); }
+.mode-icon svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+.landslide-route-shell .investigation-mode-card .investigate-button { grid-column: 1 / -1; grid-row: auto; width: 100%; align-self: end; margin-top: 1px; white-space: normal; }
+.investigation-mode-card:focus-within { border-color: var(--sg-accent); }
+.mode-help { color: var(--sg-muted); font-size: 12px; line-height: 1.5; margin: 0 0 10px; }
+.preparation-dates { display: flex; flex-wrap: wrap; gap: 32px; margin-top: 24px; }
+.preparation-dates dt { color: var(--sg-muted); font-size: 12px; }
+.preparation-dates dd { margin: 6px 0 0; }
+.displacement-preparation h2 { font-size: 16px; margin-top: 24px; }
+.displacement-preparation pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 16px; border: 1px solid var(--sg-border); border-radius: 9px; background: var(--sg-control); font-size: 13px; user-select: text; }
 .landslide-route-shell .geometry-summary { min-width: 0; min-height: 48px; grid-template-columns: 1fr auto; border: 0; border-left: 2px solid var(--sg-accent); border-radius: 0; padding: 2px 12px; background: transparent; }
 .landslide-route-shell .geometry-summary span { font-size: 9px; color: var(--sg-accent); letter-spacing: .14em; text-transform: uppercase; }
 .landslide-route-shell .geometry-summary strong { font-size: 14px; color: var(--sg-text); }
@@ -203,7 +218,7 @@
 @media (max-width: 1100px) {
   .landslide-route-shell .workspace-header { grid-template-columns: 1fr auto 1fr; gap: 14px; }
   .workspace-profile-name { max-width: 90px; }
-  .landslide-route-shell .action-bar { grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr); grid-template-areas: 'summary drawing' 'time time' 'primary primary'; max-height: min(40dvh, 300px); }
+  .landslide-route-shell .action-bar { grid-template-columns: minmax(180px, 1fr) minmax(220px, 1fr); grid-template-areas: 'summary drawing' 'time time' 'modes modes'; max-height: min(60dvh, 480px); }
 }
 @media (max-width: 820px) {
   .workspace-profile-name { display: none; }
@@ -215,7 +230,8 @@
   .landslide-route-shell .map-main { width: 100%; min-width: 0; height: auto; display: grid; grid-template-areas: 'map' 'feedback' 'controls'; grid-template-rows: minmax(340px, 56svh) auto auto; gap: 0; padding-bottom: 20px; }
   .landslide-route-shell .aoi-controls-stack { position: static; display: contents; min-width: 0; }
   .landslide-route-shell .map-canvas-wrap { grid-area: map; position: relative; inset: auto; width: 100%; min-width: 0; }
-  .landslide-route-shell .action-bar { grid-area: controls; position: relative; inset: auto; width: auto; min-width: 0; margin: 14px 12px 0; max-height: none; overflow: visible; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'summary drawing' 'time time' 'primary primary'; gap: 14px; padding: 16px; }
+  .landslide-route-shell .action-bar { grid-area: controls; position: relative; inset: auto; width: auto; min-width: 0; margin: 14px 12px 0; max-height: none; overflow: visible; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'summary drawing' 'time time' 'modes modes'; gap: 14px; padding: 16px; }
+  .investigation-mode-cards { grid-template-columns: minmax(0, 1fr); }
   .landslide-route-shell .draw-actions,
   .landslide-route-shell .time-actions,
   .landslide-route-shell .date-range { width: 100%; min-width: 0; }
@@ -237,7 +253,7 @@
   .workspace-profile-chevron { display: none; }
   .landslide-route-shell .map-search > button { padding: 0 9px; font-size: 11px; }
   .workspace-search-input input { font-size: 12px; }
-  .landslide-route-shell .action-bar { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'summary summary' 'drawing drawing' 'time time' 'primary primary'; }
+  .landslide-route-shell .action-bar { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-areas: 'summary summary' 'drawing drawing' 'time time' 'modes modes'; }
   .landslide-route-shell .draw-actions { display: flex; justify-content: flex-start; }
   .landslide-route-shell .draw-actions button { width: auto; flex: 1 1 auto; }
   .landslide-route-shell .time-actions { grid-template-columns: minmax(0, 1fr); gap: 8px; }

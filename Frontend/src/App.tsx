@@ -4,7 +4,7 @@ import type { Engine } from './data/engineData';
 import { Home } from './pages/Home';
 import { LandslidePage } from '../landslide/ui/LandslidePage';
 import { auth, firebaseConfigured, googleProvider, missingFirebaseConfig } from './firebase';
-import { isLandslideResultsRoute, isLandslideRoute, LANDSLIDE_PATH, LANDSLIDE_RESULTS_PATH, navigatePath, normalizePathname } from './routing';
+import { isLandslideDisplacementRoute, isLandslideResultsRoute, isLandslideRoute, LANDSLIDE_DISPLACEMENT_PATH, LANDSLIDE_PATH, LANDSLIDE_RESULTS_PATH, navigatePath, normalizePathname } from './routing';
 
 function App() {
   const [pathname, setPathname] = useState(() => normalizePathname(window.location.pathname));
@@ -133,6 +133,8 @@ function App() {
         user={user}
         onHome={() => navigateTo('/')}
         isResultsPage={isLandslideResultsRoute(pathname)}
+        isDisplacementPage={isLandslideDisplacementRoute(pathname)}
+        onDisplacements={() => navigateTo(LANDSLIDE_DISPLACEMENT_PATH)}
         onResults={() => navigateTo(LANDSLIDE_RESULTS_PATH)}
         onBackToMap={() => navigateTo(LANDSLIDE_PATH)}
         onSignOut={handleSignOut}

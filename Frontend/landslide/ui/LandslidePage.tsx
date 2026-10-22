@@ -3,7 +3,9 @@ import { importLibrary, setOptions } from '@googlemaps/js-api-loader';
 import type { User } from 'firebase/auth';
 import { analyzeGunwAoiQuality, createQueuedJob, getNisarHarmonyJobStatus, getProcessingJob, inspectNisarAoiWindow, listProcessingJobs, searchNisarCatalog, startGunwQualityLayers, startNisarHarmonyLayerJob, verifyGunwNativeSourceMask } from '../../src/api/catalog';
 import type { AoiWindowResponse, CatalogProduct, CatalogResponse, GunwQualityAnalysisResponse, HarmonyLayerRole, HarmonyQualityLayerBundle, HarmonyQualityLayerJob, NativeSourceMaskVerificationResponse, ProcessingJob, SubmittedHarmonyLayerJob } from '../../src/api/catalog';
-import { calculateGeodesicAreaKm2, canSubmitCatalogPreflight, validateCatalogPreflight, validatePolyline } from '../engine/validation';
+import { calculateGeodesicAreaKm2, canSubmitCatalogPreflight, validatePolyline } from '../engine/validation';
+import { prepareInvestigation } from '../engine/investigation';
+import { DisplacementPreparation } from './DisplacementPreparation';
 import { scheduleErrorToastDismissal } from './errorToast';
 import { createAoiOverlayController } from './mapOverlays';
 import { loadLandslideSessionState, persistLandslideSessionState } from './sessionState';
@@ -995,12 +997,14 @@ function loadSubmittedHarmonyJobs(): SubmittedHarmonyLayerJob[] {
   }
 }
 
-export function LandslidePage({ user, onHome, onResults, onBackToMap, isResultsPage, onSignOut }: {
+export function LandslidePage({ user, onHome, onResults, onDisplacements, onBackToMap, isResultsPage, isDisplacementPage, onSignOut }: {
   user: User;
   onHome: () => void;
   onResults: () => void;
   onBackToMap: () => void;
   isResultsPage: boolean;
+  isDisplacementPage: boolean;
+  onDisplacements: () => void;
   onSignOut: () => void;
 }) {
   const [initialSessionState] = useState(() => loadLandslideSessionState(user.uid));
@@ -1153,7 +1157,7 @@ export function LandslidePage({ user, onHome, onResults, onBackToMap, isResultsP
 
   const today = new Date().toISOString().slice(0, 10);
   const polygonAreaKm2 = coordinates.length > 2 ? calculateGeodesicAreaKm2(coordinates) : 0;
-  const catalogValidation = validateCatalogPreflight({
+  const catalogValidation = prepareInvestigation({
     coordinates,
     areaClosed,
     startDate: windowStart,
@@ -1161,7 +1165,17 @@ export function LandslidePage({ user, onHome, onResults, onBackToMap, isResultsP
     today,
   });
   const catalogEligible = catalogValidation.valid;
-  const actionableValidationError = catalogValidation.valid
+  const selectionKey = JSON.stringify([coordinates, areaClosed, windowStart, windowEnd]);
+  const currentSelectionKey = useRef(selectionKey);
+  currentSelectionKey.current = selectionKey;
+  const displacementNavigating = useRef(false);
+  useEffect(() => { displacementNavigating.current = false; }, [isDisplacementPage]);
+  const openDisplacements = () => {
+    if (!catalogValidation.valid || catalogInFlightRef.current || displacementNavigating.current) return;
+    displacementNavigating.current = true;
+    onDisplacements();
+  };
+  const actionableValidationError = catalogValidation.valid || coordinates.length < 3 || !windowStart || !windowEnd
     ? ''
     : catalogValidation.errors.find((message) => !message.startsWith('Close a valid AOI') && !message.startsWith('Choose both a start date')) || '';
   const validationPopupError = !validationAlertDismissed ? actionableValidationError : '';
@@ -1310,7 +1324,6 @@ export function LandslidePage({ user, onHome, onResults, onBackToMap, isResultsP
 
   const handleWindowStartChange = (value: string) => {
     setWindowStart(value);
-    if (windowEnd && value > windowEnd) setWindowEnd('');
     setResult(null);
     setCatalogResult(null);
     resetQueuedJobFlow();
@@ -1444,6 +1457,7 @@ export function LandslidePage({ user, onHome, onResults, onBackToMap, isResultsP
     }
 
     catalogInFlightRef.current = true;
+    const requestedSelectionKey = currentSelectionKey.current;
     setCatalogError('');
     resetQueuedJobFlow();
     setSelectedHarmonyProduct(null);
@@ -1462,11 +1476,14 @@ export function LandslidePage({ user, onHome, onResults, onBackToMap, isResultsP
         endDate: windowEnd,
         productType,
       }, user);
+      if (currentSelectionKey.current !== requestedSelectionKey) return;
       setCatalogResult(response);
       onResults();
     } catch (error) {
-      setToastRevision((current) => current + 1);
-      setCatalogError(error instanceof Error ? error.message : 'Could not check the NISAR catalogue.');
+      if (currentSelectionKey.current === requestedSelectionKey) {
+        setToastRevision((current) => current + 1);
+        setCatalogError(error instanceof Error ? error.message : 'Could not check the NISAR catalogue.');
+      }
     } finally {
       catalogInFlightRef.current = false;
       setIsCatalogLoading(false);
@@ -2016,7 +2033,7 @@ export function LandslidePage({ user, onHome, onResults, onBackToMap, isResultsP
           onSearchText={setSearchText}
           onMapReady={handleMapReady}
           onPlacesReady={handlePlacesReady}
-          isVisible={!isResultsPage}
+          isVisible={!isResultsPage && !isDisplacementPage}
         />
 
         <form className="map-search glass-float" onSubmit={handleSearch}>
@@ -2106,9 +2123,22 @@ export function LandslidePage({ user, onHome, onResults, onBackToMap, isResultsP
                 </div>
               </div>
 
-              <div className="action-buttons">
-                <button className="investigate-button" type="button" aria-invalid={!catalogEligible} disabled={!canSubmitCatalogPreflight(catalogValidation, isCatalogLoading)} onClick={runCatalogPreflight}>{isCatalogLoading ? 'Checking ASF...' : 'Check NISAR archive'}</button>
-              </div>
+              <section className="investigation-modes" aria-labelledby="investigation-mode-title">
+                <h2 id="investigation-mode-title">Choose Investigation Mode</h2>
+                {!catalogEligible && <p id="investigation-mode-help" className="mode-help">{!catalogValidation.valid && catalogValidation.errors.join(' ')}</p>}
+                <div className="investigation-mode-cards">
+                  <article className="investigation-mode-card archive-mode">
+                    <span className="mode-icon" aria-hidden="true"><Icon name="layers" /></span>
+                    <h3>Single Product Investigation</h3>
+                    <button className="investigate-button" type="button" aria-describedby={!catalogEligible ? 'investigation-mode-help' : undefined} disabled={!canSubmitCatalogPreflight(catalogValidation, isCatalogLoading)} onClick={runCatalogPreflight}>{isCatalogLoading ? 'Checking ASF...' : 'Explore NISAR Archive'}</button>
+                  </article>
+                  <article className="investigation-mode-card displacement-mode">
+                    <span className="mode-icon" aria-hidden="true"><Icon name="locate" /></span>
+                    <h3>Find Displacements</h3>
+                    <button className="investigate-button" type="button" aria-describedby={!catalogEligible ? 'investigation-mode-help' : undefined} disabled={!canSubmitCatalogPreflight(catalogValidation, isCatalogLoading)} onClick={openDisplacements}>Find Displacements</button>
+                  </article>
+                </div>
+              </section>
               {catalogResult && (
                 <div className="catalog-map-result-link" aria-live="polite">
                   <span>{catalogResult.product_count} {catalogResult.query.product_type} product{catalogResult.product_count === 1 ? '' : 's'} found.</span>
@@ -2128,10 +2158,14 @@ export function LandslidePage({ user, onHome, onResults, onBackToMap, isResultsP
 
   return (
     <div className="landslide-route-shell">
-      <div className={`landslide-map-keepalive${isResultsPage ? ' is-hidden' : ''}`} aria-hidden={isResultsPage}>
+      <div className={`landslide-map-keepalive${isResultsPage || isDisplacementPage ? ' is-hidden' : ''}`} aria-hidden={isResultsPage || isDisplacementPage}>
         {renderMapPage()}
       </div>
       {isResultsPage && renderResultsPage()}
+      {isDisplacementPage && <div className="nisar-results-page">
+        {renderWorkspaceHeader('DISPLACEMENT PREPARATION', 'Selected AOI and time window', 'Back to map', onBackToMap)}
+        <DisplacementPreparation preparation={catalogValidation} onBack={onBackToMap} />
+      </div>}
     </div>
   );
 }
