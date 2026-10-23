@@ -11,6 +11,7 @@ import {
 } from '../../src/api/catalog';
 
 const activeStates = new Set(['queued', 'dispatching', 'running']);
+const noopTaskActivityChange = () => {};
 
 function elapsed(createdAt: string) {
   const milliseconds = Math.max(0, Date.now() - new Date(createdAt).getTime());
@@ -31,7 +32,7 @@ function chooseAccountJob(jobs: DisplacementJob[], preparation: PreparedInvestig
     || null;
 }
 
-export function DisplacementPreparation({ preparation, onBack, user }: { preparation: PreparedInvestigation; onBack: () => void; user: User }) {
+export function DisplacementPreparation({ preparation, onBack, onTaskActivityChange = noopTaskActivityChange, user }: { preparation: PreparedInvestigation; onBack: () => void; onTaskActivityChange?: (active: boolean) => void; user: User }) {
   const [busy, setBusy] = useState(false);
   const [job, setJob] = useState<DisplacementJob | null>(null);
   const [jobError, setJobError] = useState('');
@@ -62,6 +63,10 @@ export function DisplacementPreparation({ preparation, onBack, user }: { prepara
     }, 5000);
     return () => window.clearInterval(timer);
   }, [job, user]);
+
+  useEffect(() => {
+    if (job) onTaskActivityChange(activeStates.has(job.state));
+  }, [job, onTaskActivityChange]);
 
   const submit = useCallback(async () => {
     if (!preparation.valid || busy) return;
@@ -111,12 +116,13 @@ export function DisplacementPreparation({ preparation, onBack, user }: { prepara
   }, [busy, job, user]);
 
   const hasActiveJob = Boolean(job && activeStates.has(job.state));
+  const canReturnToMap = job?.state === 'cancelled' && job.stage === 'cancelled_by_user';
   return <main className="nisar-results-main displacement-preparation">
     <section className="nisar-results-summary">
       <span className="result-kicker">DISPLACEMENT PROCESSING</span>
       <h1>Find Displacements</h1>
       <p>Your processing task belongs to this signed-in account and continues if you close the browser. Reopen this page to see its current state.</p>
-      <button type="button" className="demo-button" onClick={onBack}>Back to map</button>
+      {canReturnToMap && <button type="button" className="demo-button" onClick={onBack}>Back to map</button>}
 
       {job && <section className="displacement-job-status" aria-live="polite">
         <h2>Processing status</h2>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 import type { Engine } from './data/engineData';
+import { listDisplacementJobs } from './api/catalog';
 import { Home } from './pages/Home';
 import { LandslidePage } from '../landslide/ui/LandslidePage';
 import { auth, firebaseConfigured, googleProvider, missingFirebaseConfig } from './firebase';
@@ -14,6 +15,7 @@ function App() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [pendingRoute, setPendingRoute] = useState<string | null>(null);
+  const [hasActiveDisplacementTask, setHasActiveDisplacementTask] = useState(false);
 
   const navigateTo = useCallback((nextPath: string) => {
     const normalizedPath = navigatePath(nextPath, window.location.pathname, window.history.pushState.bind(window.history));
@@ -30,6 +32,32 @@ function App() {
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
+
+  const refreshDisplacementTaskState = useCallback(async (currentUser: User) => {
+    try {
+      const jobs = await listDisplacementJobs(currentUser);
+      setHasActiveDisplacementTask(jobs.some((job) => ['queued', 'dispatching', 'running'].includes(job.state)));
+    } catch {
+      // A backend outage must not create a false navigation lock. The task
+      // screen presents its own recoverable account-state error instead.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!user) {
+      setHasActiveDisplacementTask(false);
+      return undefined;
+    }
+    void refreshDisplacementTaskState(user);
+    const timer = window.setInterval(() => { void refreshDisplacementTaskState(user); }, 5000);
+    return () => window.clearInterval(timer);
+  }, [refreshDisplacementTaskState, user]);
+
+  useEffect(() => {
+    if (hasActiveDisplacementTask && !isLandslideDisplacementRoute(pathname)) {
+      navigateTo(LANDSLIDE_DISPLACEMENT_PATH);
+    }
+  }, [hasActiveDisplacementTask, navigateTo, pathname]);
 
   useEffect(() => {
     if (!auth) {
@@ -137,6 +165,7 @@ function App() {
         onDisplacements={() => navigateTo(LANDSLIDE_DISPLACEMENT_PATH)}
         onResults={() => navigateTo(LANDSLIDE_RESULTS_PATH)}
         onBackToMap={() => navigateTo(LANDSLIDE_PATH)}
+        onDisplacementTaskActivityChange={setHasActiveDisplacementTask}
         onSignOut={handleSignOut}
       />
     );

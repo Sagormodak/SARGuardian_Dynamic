@@ -998,11 +998,12 @@ function loadSubmittedHarmonyJobs(): SubmittedHarmonyLayerJob[] {
   }
 }
 
-export function LandslidePage({ user, onHome, onResults, onDisplacements, onBackToMap, isResultsPage, isDisplacementPage, onSignOut }: {
+export function LandslidePage({ user, onHome, onResults, onDisplacements, onBackToMap, onDisplacementTaskActivityChange, isResultsPage, isDisplacementPage, onSignOut }: {
   user: User;
   onHome: () => void;
   onResults: () => void;
   onBackToMap: () => void;
+  onDisplacementTaskActivityChange: (active: boolean) => void;
   isResultsPage: boolean;
   isDisplacementPage: boolean;
   onDisplacements: () => void;
@@ -1856,7 +1857,7 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
   };
 
 
-  const renderWorkspaceHeader = (title: string, subtitle: string, actionLabel: string, onAction: () => void) => {
+  const renderWorkspaceHeader = (title: string, subtitle: string, actionLabel?: string, onAction?: () => void) => {
     const profileMenuId = actionLabel === 'Home' ? 'map-account-menu' : 'results-account-menu';
     return (
       <header className="map-header workspace-header">
@@ -1866,9 +1867,9 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
         </button>
         <div className="map-title"><span>{title}</span><small>{subtitle}</small></div>
         <nav className="map-header-actions" aria-label="Workspace navigation">
-          <button className="workspace-nav-link" type="button" onClick={onAction}>
+          {actionLabel && onAction && <button className="workspace-nav-link" type="button" onClick={onAction}>
             {actionLabel === 'Home' ? <Icon name="home" /> : <span aria-hidden="true">←</span>}{actionLabel}
-          </button>
+          </button>}
           <div className="profile-inline">
             <button className="workspace-profile-trigger" type="button" aria-label="Authenticated user profile" aria-expanded={profileMenuOpen} aria-controls={profileMenuId} onClick={() => setProfileMenuOpen((current) => !current)}>
               {user.photoURL && !profileImageFailed ? <img src={user.photoURL} alt="" className="profile-avatar" onError={() => setProfileImageFailed(true)} /> : <span className="profile-avatar profile-fallback">{(user.displayName ?? user.email ?? 'U').charAt(0).toUpperCase()}</span>}
@@ -2178,8 +2179,8 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
       </div>
       {isResultsPage && renderResultsPage()}
       {isDisplacementPage && <div className="nisar-results-page">
-        {renderWorkspaceHeader('DISPLACEMENT PREPARATION', 'Selected AOI and time window', 'Back to map', onBackToMap)}
-        <DisplacementPreparation preparation={catalogValidation} onBack={onBackToMap} user={user} />
+        {renderWorkspaceHeader('DISPLACEMENT PROCESSING', 'Account processing status')}
+        <DisplacementPreparation preparation={catalogValidation} onBack={onBackToMap} onTaskActivityChange={onDisplacementTaskActivityChange} user={user} />
       </div>}
     </div>
   );

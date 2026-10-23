@@ -18,7 +18,7 @@ describe('investigation mode state integration', () => {
     const state = loadLandslideSessionState('test-user');
     Object.assign(state, { coordinates: [[85.3, 27.7], [85.301, 27.7], [85.301, 27.701]], areaClosed: true, windowStart: '2026-10-01', windowEnd: '2026-10-22' });
     persistLandslideSessionState('test-user', state);
-    const render = (isDisplacementPage = false) => renderToStaticMarkup(<LandslidePage user={{ uid: 'test-user' } as User} isResultsPage={false} isDisplacementPage={isDisplacementPage} onHome={() => {}} onResults={() => {}} onDisplacements={() => {}} onBackToMap={() => {}} onSignOut={() => {}} />);
+    const render = (isDisplacementPage = false) => renderToStaticMarkup(<LandslidePage user={{ uid: 'test-user' } as User} isResultsPage={false} isDisplacementPage={isDisplacementPage} onHome={() => {}} onResults={() => {}} onDisplacements={() => {}} onBackToMap={() => {}} onDisplacementTaskActivityChange={() => {}} onSignOut={() => {}} />);
     const map = render();
     const cards = map.match(/<article class="investigation-mode-card[\s\S]*?<\/article>/g)!;
     expect(cards).toHaveLength(2);

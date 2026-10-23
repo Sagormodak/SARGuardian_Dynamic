@@ -13,7 +13,7 @@ describe('displacement preparation route', () => {
     expect(html).not.toContain('Copy WKT');
     expect(html).not.toContain('Copy Payload');
     expect(html).toContain('Start displacement processing');
-    expect(html).toContain('Back to map');
+    expect(html).not.toContain('Back to map');
   });
   it('shows accessible errors without a fabricated payload on an empty/direct visit', () => {
     const html = renderToStaticMarkup(<DisplacementPreparation preparation={{ valid: false, errors: ['Select an AOI.'] }} onBack={() => {}} user={user} />);
