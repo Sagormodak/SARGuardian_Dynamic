@@ -1075,6 +1075,7 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
   const [isSourceMaskVerifying, setIsSourceMaskVerifying] = useState(false);
   const [sourceMaskVerificationError, setSourceMaskVerificationError] = useState('');
   const [sourceMaskVerification, setSourceMaskVerification] = useState<NativeSourceMaskVerificationResponse | null>(null);
+  const [displacementStartRequest, setDisplacementStartRequest] = useState(0);
   const mapRef = useRef<google.maps.Map | null>(null);
   const workflowGranuleName = selectedHarmonyProduct?.granule_name || qualityGranuleName.trim();
   const individualLayerJobs: Record<string, HarmonyQualityLayerJob> = {};
@@ -1173,6 +1174,7 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
   const openDisplacements = () => {
     if (!catalogValidation.valid || catalogInFlightRef.current || displacementNavigating.current) return;
     displacementNavigating.current = true;
+    setDisplacementStartRequest((request) => request + 1);
     onDisplacements();
   };
   const actionableValidationError = catalogValidation.valid || coordinates.length < 3 || !windowStart || !windowEnd
@@ -2179,7 +2181,7 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
       {isResultsPage && renderResultsPage()}
       {isDisplacementPage && <div className="nisar-results-page">
         {renderWorkspaceHeader('DISPLACEMENT PREPARATION', 'Selected AOI and time window', 'Back to map', onBackToMap)}
-        <DisplacementPreparation preparation={catalogValidation} onBack={onBackToMap} user={user} />
+        <DisplacementPreparation preparation={catalogValidation} onBack={onBackToMap} user={user} autoStartRequest={displacementStartRequest} />
       </div>}
     </div>
   );
