@@ -84,6 +84,35 @@ def enforce_download_budget(records: Iterable[dict[str, Any]], max_download_gib:
     return total_gib
 
 
+def _install_asf_response_compatibility(acquisition: Any) -> None:
+    """Adapt the pinned source's documented dict-or-list ASF JSON contract.
+
+    The pinned source annotates ``_get`` as returning ``dict | list``, but its
+    ``asf_query`` immediately calls ``.get``.  ASF currently returns a top-level
+    list for this query.  Normalizing only that list to the source's existing
+    ``{"results": [...]}`` shape preserves every catalogue record and lets the
+    original acquisition, filtering, and reader code remain authoritative.
+    """
+    source_get = acquisition._get
+
+    def compatible_get(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        response = source_get(*args, **kwargs)
+        if isinstance(response, list):
+            if not all(isinstance(row, dict) for row in response):
+                raise AdapterError("ASF catalogue returned a list containing an invalid product record.")
+            return {"results": response}
+        if not isinstance(response, dict):
+            raise AdapterError("ASF catalogue returned an unsupported JSON response type.")
+        results = response.get("results")
+        if results is not None and (
+            not isinstance(results, list) or not all(isinstance(row, dict) for row in results)
+        ):
+            raise AdapterError("ASF catalogue returned an invalid results payload.")
+        return response
+
+    acquisition._get = compatible_get
+
+
 def _load_science_modules(science_root: Path, aoi_wkt: str) -> tuple[Any, Any, Any]:
     source_dir = science_root / "src"
     if not (source_dir / "aoi_wkt.py").is_file():
@@ -100,6 +129,7 @@ def _load_science_modules(science_root: Path, aoi_wkt: str) -> tuple[Any, Any, A
     gunw = importlib.import_module("gunw_reader")
     goff = importlib.import_module("goff_reader")
     acquisition = importlib.import_module("nisar_acquisition")
+    _install_asf_response_compatibility(acquisition)
     if "custom" not in gunw.AOIS:
         raise AdapterError("Pinned science source did not install the submitted custom AOI.")
     acquisition.set_aoi("custom")

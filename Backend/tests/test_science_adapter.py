@@ -33,6 +33,29 @@ def test_selection_refuses_unknown_size_and_download_budget_excess() -> None:
         adapter.enforce_download_budget([record("2026-10-01", "2026-10-13", size_mb=2048)], 1)
 
 
+def test_adapter_normalizes_list_asf_responses_for_the_pinned_source() -> None:
+    class Acquisition:
+        def _get(self, _url):
+            return [{"granuleName": "NISAR_example"}]
+
+        def asf_query(self):
+            body = self._get("https://asf.example.test")
+            return body.get("results", body if isinstance(body, list) else [])
+
+    acquisition = Acquisition()
+    adapter._install_asf_response_compatibility(acquisition)
+
+    assert acquisition.asf_query() == [{"granuleName": "NISAR_example"}]
+
+
+def test_adapter_rejects_invalid_asf_response_shape() -> None:
+    acquisition = SimpleNamespace(_get=lambda _url: ["not-a-product"])
+    adapter._install_asf_response_compatibility(acquisition)
+
+    with pytest.raises(adapter.AdapterError, match="invalid product record"):
+        acquisition._get("https://asf.example.test")
+
+
 def test_adapter_rejects_a_direct_workflow_request_outside_the_api_date_limit(tmp_path: Path) -> None:
     source_root = tmp_path / "science"; source_root.mkdir()
     with pytest.raises(adapter.AdapterError, match="cannot exceed 90 days"):
