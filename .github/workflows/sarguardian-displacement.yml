@@ -14,7 +14,7 @@ run-name: Displacement ${{ inputs.job_id }}
         required: true
         type: string
       start_date:
-        description: Inclusive YYYY-MM-DD acquisition window start
+        description: Inclusive YYYY-MM-DD secondary-acquisition window start; reference may predate it
         required: true
         type: string
       end_date:

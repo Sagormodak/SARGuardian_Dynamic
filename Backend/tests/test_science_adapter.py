@@ -18,14 +18,18 @@ def record(reference: str, secondary: str, product: str = "GUNW", size_mb: float
     }
 
 
-def test_selection_requires_both_pair_acquisitions_inside_the_requested_window() -> None:
+def test_selection_uses_the_secondary_acquisition_date_and_rejects_invalid_pairs() -> None:
     selected = adapter.select_eligible_products([
         record("2026-10-01", "2026-10-13"),
         record("2026-09-29", "2026-10-11"),
         record("2026-10-12", "2026-10-24"),
+        record("2026-10-14", "2026-10-13"),
         record("2026-10-02", "2026-10-14", "RIFG"),
     ], date(2026, 10, 1), date(2026, 10, 22))
-    assert [item["granule"] for item in selected] == ["NISAR_L2_PR_GUNW_example"]
+    assert [(item["reference"], item["secondary"]) for item in selected] == [
+        (date(2026, 9, 29), date(2026, 10, 11)),
+        (date(2026, 10, 1), date(2026, 10, 13)),
+    ]
 
 
 def test_selection_allows_unknown_size_until_it_is_validated_and_enforces_the_budget() -> None:

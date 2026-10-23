@@ -59,7 +59,14 @@ def write_stage(work_dir: Path, stage: str, **details: Any) -> None:
 
 
 def select_eligible_products(records: Iterable[dict[str, Any]], start_date: date, end_date: date) -> list[dict[str, Any]]:
-    """Use the strict, reproducible policy: both acquisitions are in-window."""
+    """Select NISAR pairs by their secondary-acquisition date.
+
+    This is the documented policy used by the dynamic-AOI reference workflow:
+    a pair represents change up to its secondary acquisition, so an in-window
+    secondary is eligible even when its reference falls immediately before the
+    requested start date.  The returned manifest records that policy so the
+    date semantics are never implicit.
+    """
     if end_date < start_date:
         raise AdapterError("End date must be on or after start date.")
     selected = [
@@ -67,7 +74,8 @@ def select_eligible_products(records: Iterable[dict[str, Any]], start_date: date
         if record.get("productType") in PRODUCT_TYPES
         and isinstance(record.get("reference"), date)
         and isinstance(record.get("secondary"), date)
-        and start_date <= record["reference"] <= record["secondary"] <= end_date
+        and record["reference"] <= record["secondary"]
+        and start_date <= record["secondary"] <= end_date
         and isinstance(record.get("url"), str) and record["url"]
     ]
     selected.sort(key=lambda item: (item["secondary"], item["reference"], item["productType"], item["granule"]))
@@ -333,7 +341,7 @@ def run_job(job: JobInput) -> dict[str, Any]:
         "science_source_ref": SCIENCE_REF,
         "aoi_wkt_sha256": hashlib.sha256(job.aoi_wkt.encode("utf-8")).hexdigest(),
         "start_date": job.start_date.isoformat(), "end_date": job.end_date.isoformat(),
-        "date_policy": "both_acquisitions_inside_requested_window",
+        "date_policy": "secondary_acquisition_inside_requested_window;reference_may_precede_start",
         "selected_product_count": len(selected), "estimated_download_gib": round(download_gib, 3),
         "products": product_results, "validated_outputs": validated_outputs,
     }
