@@ -12,8 +12,9 @@ import {
 const activeStates = new Set(['queued', 'dispatching', 'running']);
 const noopTaskActivityChange = () => {};
 
-function elapsed(createdAt: string) {
-  const milliseconds = Math.max(0, Date.now() - new Date(createdAt).getTime());
+function elapsed(createdAt: string, updatedAt: string, state: DisplacementJob['state'], now: number) {
+  const finishedAt = activeStates.has(state) ? now : new Date(updatedAt).getTime();
+  const milliseconds = Math.max(0, finishedAt - new Date(createdAt).getTime());
   const seconds = Math.floor(milliseconds / 1000);
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
@@ -38,6 +39,7 @@ export function DisplacementPreparation({ preparation, onBack, onTaskActivityCha
   const [jobError, setJobError] = useState('');
   const [accountLoaded, setAccountLoaded] = useState(false);
   const [showResubmitConfirmation, setShowResubmitConfirmation] = useState(false);
+  const [clock, setClock] = useState(() => Date.now());
 
   const loadAccountJob = useCallback(async () => {
     setJobError('');
@@ -63,6 +65,15 @@ export function DisplacementPreparation({ preparation, onBack, onTaskActivityCha
     }, 5000);
     return () => window.clearInterval(timer);
   }, [job, user]);
+
+  // The displayed elapsed time is local UI state, not a server poll. Keep it
+  // smooth without turning the account-status API into a once-per-second poll.
+  useEffect(() => {
+    if (!job || !activeStates.has(job.state)) return undefined;
+    setClock(Date.now());
+    const timer = window.setInterval(() => setClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [job]);
 
   useEffect(() => {
     if (job) onTaskActivityChange(activeStates.has(job.state));
@@ -119,14 +130,13 @@ export function DisplacementPreparation({ preparation, onBack, onTaskActivityCha
       {job && <section className="displacement-job-status" aria-live="polite">
         <h2>Processing status</h2>
         <p><b>Status:</b> {job.state}</p><p><b>Job ID:</b> {job.id}</p>
-        <p><b>Stage:</b> {job.stage}</p><p><b>Submitted:</b> {new Date(job.created_at).toLocaleString()} · {elapsed(job.created_at)}</p>
+        <p><b>Stage:</b> {job.stage}</p><p><b>Submitted:</b> {new Date(job.created_at).toLocaleString()} · {elapsed(job.created_at, job.updated_at, job.state, clock)}</p>
         {job.error_message && <p role="alert">{job.error_message}</p>}
         {hasActiveJob && <div className="displacement-task-actions">
           <button type="button" className="demo-button danger-button" disabled={busy} onClick={() => void cancel()}>{busy ? 'Cancelling…' : 'Cancel task'}</button>
           <button type="button" className="investigate-button" disabled={busy} onClick={() => setShowResubmitConfirmation(true)}>Refresh task</button>
         </div>}
-        {job.state === 'succeeded' && <>{job.result_summary && <pre tabIndex={0} aria-label="Validated output summary"><code>{JSON.stringify(job.result_summary, null, 2)}</code></pre>}
-          {job.artifact_url && <p><a href={job.artifact_url} target="_blank" rel="noreferrer">Open validated outputs</a></p>}</>}
+        {job.state === 'succeeded' && job.artifact_url && <p><a className="investigate-button validated-output-link" href={job.artifact_url} target="_blank" rel="noreferrer">Open validated output</a></p>}
       </section>}
 
       {showResubmitConfirmation && job && <section className="displacement-resubmit-dialog" role="dialog" aria-modal="true" aria-labelledby="resubmit-title">

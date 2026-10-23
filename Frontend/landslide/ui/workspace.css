@@ -103,6 +103,7 @@
 .landslide-route-shell .map-tools .layers-menu button[aria-checked="true"] { color: var(--sg-accent); border-color: var(--sg-accent); background: rgba(35, 141, 153, .2); }
 .landslide-route-shell .map-search > button,
 .landslide-route-shell .investigate-button { min-height: 40px; padding: 0 15px; border: 1px solid #6eede4; border-radius: 9px; background: linear-gradient(150deg, #72e9dc, #2cbbcf); color: #062c3b; box-shadow: 0 4px 14px rgba(16, 162, 176, .12); font-size: 12px; }
+.landslide-route-shell .validated-output-link { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 .landslide-route-shell .investigate-button:hover:not(:disabled),
 .landslide-route-shell .map-search > button:hover:not(:disabled) { background: #9cf4e6; }
 .landslide-route-shell button:disabled { cursor: not-allowed; opacity: .5; }
