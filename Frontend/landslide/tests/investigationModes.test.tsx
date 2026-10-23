@@ -32,12 +32,12 @@ describe('investigation mode state integration', () => {
     const preparation = render(true);
     expect(preparation).not.toContain('POLYGON');
     expect(preparation).not.toContain('Copy Payload');
-    expect(preparation).toContain('Start displacement processing');
+    expect(preparation).toContain('Find Displacements');
     expect(render()).toBe(map);
     state.coordinates = [];
     state.areaClosed = false;
     persistLandslideSessionState('test-user', state);
     for (const card of render().match(/<article class="investigation-mode-card[\s\S]*?<\/article>/g)!) expect(card).toContain('disabled=""');
-    expect(render(true)).toContain('Loading your account task');
+    expect(render(true)).not.toContain('displacement-preparation');
   });
 });

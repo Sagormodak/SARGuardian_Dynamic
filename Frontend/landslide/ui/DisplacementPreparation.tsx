@@ -3,7 +3,6 @@ import type { User } from 'firebase/auth';
 import type { PreparedInvestigation } from '../engine/investigation';
 import {
   cancelDisplacementJob,
-  createDisplacementJob,
   getDisplacementJob,
   listDisplacementJobs,
   resubmitDisplacementJob,
@@ -69,24 +68,12 @@ export function DisplacementPreparation({ preparation, onBack, onTaskActivityCha
     if (job) onTaskActivityChange(activeStates.has(job.state));
   }, [job, onTaskActivityChange]);
 
-  const submit = useCallback(async () => {
-    if (!preparation.valid || busy) return;
-    setBusy(true);
-    setJobError('');
-    try {
-      const created = await createDisplacementJob({
-        aoiWkt: preparation.payload.aoi_wkt,
-        startDate: preparation.payload.start_date,
-        endDate: preparation.payload.end_date,
-        idempotencyKey: crypto.randomUUID(),
-      }, user);
-      setJob(created);
-    } catch (error) {
-      setJobError(error instanceof Error ? error.message : 'Could not submit the displacement job.');
-    } finally {
-      setBusy(false);
-    }
-  }, [busy, preparation, user]);
+  // This route is only for an account task already created on the map. It is
+  // never a second submission screen, and a direct/expired route returns to
+  // the map once the account lookup has completed.
+  useEffect(() => {
+    if (accountLoaded && !job && !jobError) onBack();
+  }, [accountLoaded, job, jobError, onBack]);
 
   const cancel = useCallback(async () => {
     if (!job || !activeStates.has(job.state) || busy) return;
@@ -122,6 +109,8 @@ export function DisplacementPreparation({ preparation, onBack, onTaskActivityCha
   }, [busy, job, user]);
 
   const hasActiveJob = Boolean(job && activeStates.has(job.state));
+  if (!job && !jobError) return null;
+
   return <main className="nisar-results-main displacement-preparation">
     <section className="nisar-results-summary">
       <span className="result-kicker">DISPLACEMENT PROCESSING</span>
@@ -139,9 +128,6 @@ export function DisplacementPreparation({ preparation, onBack, onTaskActivityCha
         {job.state === 'succeeded' && <>{job.result_summary && <pre tabIndex={0} aria-label="Validated output summary"><code>{JSON.stringify(job.result_summary, null, 2)}</code></pre>}
           {job.artifact_url && <p><a href={job.artifact_url} target="_blank" rel="noreferrer">Open validated outputs</a></p>}</>}
       </section>}
-
-      {!job && preparation.valid && <button type="button" className="investigate-button" disabled={busy || !accountLoaded} onClick={() => void submit()}>{busy ? 'Submitting…' : 'Start displacement processing'}</button>}
-      {!job && !preparation.valid && <p role="alert">{accountLoaded ? 'No account task was found. Return to the map and choose an AOI and time window to begin.' : 'Loading your account task…'}</p>}
 
       {showResubmitConfirmation && job && <section className="displacement-resubmit-dialog" role="dialog" aria-modal="true" aria-labelledby="resubmit-title">
         <h2 id="resubmit-title">Refresh this task?</h2>

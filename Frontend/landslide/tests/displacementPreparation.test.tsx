@@ -12,12 +12,12 @@ describe('displacement preparation route', () => {
     expect(html).not.toContain('POLYGON');
     expect(html).not.toContain('Copy WKT');
     expect(html).not.toContain('Copy Payload');
-    expect(html).toContain('Start displacement processing');
+    expect(html).not.toContain('Start displacement processing');
     expect(html).not.toContain('Back to map');
   });
-  it('shows accessible errors without a fabricated payload on an empty/direct visit', () => {
+  it('does not render a second submission screen on an empty/direct visit', () => {
     const html = renderToStaticMarkup(<DisplacementPreparation preparation={{ valid: false, errors: ['Select an AOI.'] }} onBack={() => {}} user={user} />);
-    expect(html).toContain('role="alert"');
+    expect(html).toBe('');
     expect(html).not.toContain('POLYGON');
     expect(html).not.toContain('Copy Payload');
   });
@@ -32,10 +32,10 @@ describe('displacement preparation route', () => {
     expect(push).toHaveBeenCalledTimes(3);
     expect(navigatePath(LANDSLIDE_PATH, path, push)).toBe('/landslide');
   });
-  it('does not submit automatically when the displacement page opens', () => {
+  it('does not expose a second submission control on the task status route', () => {
     const preparation = prepareInvestigation({ coordinates: [[85, 27], [85.001, 27], [85, 27.001]], areaClosed: true, startDate: '2026-10-01', endDate: '2026-10-22', today: '2026-10-23' });
     const html = renderToStaticMarkup(<DisplacementPreparation preparation={preparation} onBack={() => {}} user={user} />);
-    expect(html).toContain('Start displacement processing');
+    expect(html).not.toContain('Start displacement processing');
     expect(html).not.toContain('Preparing displacement job');
   });
 });

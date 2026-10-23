@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { importLibrary, setOptions } from '@googlemaps/js-api-loader';
 import type { User } from 'firebase/auth';
-import { analyzeGunwAoiQuality, createQueuedJob, getNisarHarmonyJobStatus, getProcessingJob, inspectNisarAoiWindow, listProcessingJobs, searchNisarCatalog, startGunwQualityLayers, startNisarHarmonyLayerJob, verifyGunwNativeSourceMask } from '../../src/api/catalog';
+import { analyzeGunwAoiQuality, createDisplacementJob, createQueuedJob, getNisarHarmonyJobStatus, getProcessingJob, inspectNisarAoiWindow, listProcessingJobs, searchNisarCatalog, startGunwQualityLayers, startNisarHarmonyLayerJob, verifyGunwNativeSourceMask } from '../../src/api/catalog';
 import type { AoiWindowResponse, CatalogProduct, CatalogResponse, GunwQualityAnalysisResponse, HarmonyLayerRole, HarmonyQualityLayerBundle, HarmonyQualityLayerJob, NativeSourceMaskVerificationResponse, NisarProductType, ProcessingJob, SubmittedHarmonyLayerJob } from '../../src/api/catalog';
 import { calculateGeodesicAreaKm2, canSubmitCatalogPreflight, validatePolyline } from '../engine/validation';
 import { prepareInvestigation } from '../engine/investigation';
@@ -1036,6 +1036,7 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
   const [productType, setProductType] = useState<NisarProductType>(() => initialSessionState.catalogResult?.query.product_type ?? 'GUNW');
   const [catalogResult, setCatalogResult] = useState<CatalogResponse | null>(initialSessionState.catalogResult);
   const [isCatalogLoading, setIsCatalogLoading] = useState(false);
+  const [isDisplacementSubmitting, setIsDisplacementSubmitting] = useState(false);
   const [catalogError, setCatalogError] = useState('');
   const [queuedJob, setQueuedJob] = useState<ProcessingJob | null>(null);
   const [confirmQueuedJob, setConfirmQueuedJob] = useState(false);
@@ -1171,10 +1172,26 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
   currentSelectionKey.current = selectionKey;
   const displacementNavigating = useRef(false);
   useEffect(() => { displacementNavigating.current = false; }, [isDisplacementPage]);
-  const openDisplacements = () => {
-    if (!catalogValidation.valid || catalogInFlightRef.current || displacementNavigating.current) return;
+  const openDisplacements = async () => {
+    if (!catalogValidation.valid || catalogInFlightRef.current || displacementNavigating.current || isDisplacementSubmitting) return;
     displacementNavigating.current = true;
-    onDisplacements();
+    setIsDisplacementSubmitting(true);
+    setCatalogError('');
+    try {
+      await createDisplacementJob({
+        aoiWkt: catalogValidation.payload.aoi_wkt,
+        startDate: catalogValidation.payload.start_date,
+        endDate: catalogValidation.payload.end_date,
+        idempotencyKey: crypto.randomUUID(),
+      }, user);
+      onDisplacementTaskActivityChange(true);
+      onDisplacements();
+    } catch (submissionError) {
+      displacementNavigating.current = false;
+      setCatalogError(submissionError instanceof Error ? submissionError.message : 'Could not start displacement processing.');
+    } finally {
+      setIsDisplacementSubmitting(false);
+    }
   };
   const actionableValidationError = catalogValidation.valid || coordinates.length < 3 || !windowStart || !windowEnd
     ? ''
@@ -2157,7 +2174,7 @@ export function LandslidePage({ user, onHome, onResults, onDisplacements, onBack
                   <article className="investigation-mode-card displacement-mode">
                     <span className="mode-icon" aria-hidden="true"><Icon name="locate" /></span>
                     <h3>Find Displacements</h3>
-                    <button className="investigate-button" type="button" disabled={!canSubmitCatalogPreflight(catalogValidation, isCatalogLoading)} onClick={openDisplacements}>Find Displacements</button>
+                    <button className="investigate-button" type="button" disabled={!canSubmitCatalogPreflight(catalogValidation, isCatalogLoading) || isDisplacementSubmitting} onClick={() => void openDisplacements()}>{isDisplacementSubmitting ? 'Starting processing…' : 'Find Displacements'}</button>
                   </article>
                 </div>
               </section>
