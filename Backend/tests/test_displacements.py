@@ -183,3 +183,10 @@ def test_displacement_migration_has_immutable_owner_scoped_job_schema() -> None:
     assert "displacement_jobs_transition_guard" in sql
     assert "callback_sequence" in sql
     assert "enable row level security" in sql
+
+
+def test_displacement_workflow_initializes_runner_workspace_in_a_step() -> None:
+    workflow = (__import__("pathlib").Path(main_module.__file__).parents[2] / ".github" / "workflows" / "sarguardian-displacement.yml").read_text(encoding="utf-8")
+    assert "SARGUARDIAN_WORK_DIR: ${{ runner.temp }}" not in workflow
+    assert "Initialize isolated job workspace" in workflow
+    assert "${RUNNER_TEMP}/sarguardian-displacement-${JOB_ID}" in workflow

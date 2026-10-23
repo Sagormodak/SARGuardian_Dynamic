@@ -46,7 +46,6 @@ jobs:
       CALLBACK_SECRET: ${{ secrets.DISPLACEMENT_CALLBACK_SECRET }}
       EARTHDATA_USERNAME: ${{ secrets.EARTHDATA_USERNAME }}
       EARTHDATA_PASSWORD: ${{ secrets.EARTHDATA_PASSWORD }}
-      SARGUARDIAN_WORK_DIR: ${{ runner.temp }}/sarguardian-displacement-${{ inputs.job_id }}
     steps:
       - name: Checkout Dynamic workflow revision
         uses: actions/checkout@v4
@@ -57,6 +56,14 @@ jobs:
           repository: moshiour0/SARGuardian
           ref: 10639a916c9829850775410b3ed7de62e527770d
           path: science-source
+
+      - name: Initialize isolated job workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          work_dir="${RUNNER_TEMP}/sarguardian-displacement-${JOB_ID}"
+          mkdir -p "$work_dir"
+          printf 'SARGUARDIAN_WORK_DIR=%s\n' "$work_dir" >> "$GITHUB_ENV"
 
       - name: Verify dynamic AOI science capability
         run: |
