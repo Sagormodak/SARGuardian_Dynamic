@@ -146,6 +146,10 @@
 .preparation-dates dd { margin: 6px 0 0; }
 .displacement-preparation h2 { font-size: 16px; margin-top: 24px; }
 .displacement-preparation pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 16px; border: 1px solid var(--sg-border); border-radius: 9px; background: var(--sg-control); font-size: 13px; user-select: text; }
+.landslide-route-shell .displacement-job-status { margin-top: 22px; padding-top: 4px; border-top: 1px solid var(--sg-border); }
+.landslide-route-shell .displacement-resubmit-dialog { margin-top: 18px; padding: 16px; border: 1px solid rgba(72, 225, 220, .55); border-radius: 10px; background: rgba(6, 41, 56, .96); box-shadow: 0 12px 30px rgba(0, 15, 25, .28); }
+.landslide-route-shell .displacement-resubmit-dialog h2 { margin-top: 0; }
+.landslide-route-shell .displacement-resubmit-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
 .landslide-route-shell .geometry-summary { min-width: 0; min-height: 48px; grid-template-columns: 1fr auto; border: 0; border-left: 2px solid var(--sg-accent); border-radius: 0; padding: 2px 12px; background: transparent; }
 .landslide-route-shell .geometry-summary span { font-size: 9px; color: var(--sg-accent); letter-spacing: .14em; text-transform: uppercase; }
 .landslide-route-shell .geometry-summary strong { font-size: 14px; color: var(--sg-text); }
@@ -267,6 +271,8 @@
   .landslide-route-shell .catalog-preflight-heading { flex-wrap: wrap; }
   .landslide-route-shell .catalog-family-toggle { justify-content: flex-start; }
   .landslide-route-shell .catalog-family-toggle > span { text-align: left; }
+  .landslide-route-shell .displacement-resubmit-actions { align-items: stretch; flex-direction: column; }
+  .landslide-route-shell .displacement-resubmit-actions button { width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) {
   .landslide-route-shell button { transition: none; }

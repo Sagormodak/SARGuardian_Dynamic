@@ -18,9 +18,12 @@ from .jobs import CreateJobRequest, JobResponse, JobState
 from .displacements import (
     CreateDisplacementJobRequest,
     DisplacementJobResponse,
+    GitHubCancellationError,
     GitHubDispatchError,
+    ResubmitDisplacementJobRequest,
     WorkerCallback,
     callback_signature_is_valid,
+    cancel_workflow_run,
     dispatch_workflow,
     find_dispatched_workflow_run,
     is_dispatch_timed_out,
@@ -310,22 +313,28 @@ def get_job(job_id: UUID, user: dict = Depends(get_current_user)) -> JobResponse
     return _job_response(record)
 
 
-@app.post("/api/displacement-jobs", response_model=DisplacementJobResponse)
-def create_displacement_job(request: CreateDisplacementJobRequest, user: dict = Depends(get_current_user)) -> DisplacementJobResponse:
+def _validate_displacement_request(request: CreateDisplacementJobRequest) -> None:
     if request.end_date < request.start_date:
         raise HTTPException(status_code=422, detail="end_date must be on or after start_date.")
     if (request.end_date - request.start_date).days > MAX_DATE_WINDOW_DAYS:
         raise HTTPException(status_code=422, detail=f"Date range cannot exceed {MAX_DATE_WINDOW_DAYS} days.")
     if request.end_date > date.today():
         raise HTTPException(status_code=422, detail="end_date cannot be in the future.")
-    owner_uid = _required_owner_uid(user)
-    store = _require_store()
+
+
+def _create_and_dispatch_displacement_job(owner_uid: str, request: CreateDisplacementJobRequest, store) -> DisplacementJobResponse:
     try:
         existing = store.get_displacement_job_by_idempotency(owner_uid, request.idempotency_key)
+        active = store.find_active_displacement_job(owner_uid, request.aoi_wkt, request.start_date.isoformat(), request.end_date.isoformat())
     except PersistenceError:
         raise HTTPException(status_code=503, detail="Could not check displacement job persistence.") from None
     if existing:
         return _displacement_response(existing)
+    if active:
+        # A durable active request already exists for this account and exact
+        # immutable payload. Never use a page refresh or second browser tab to
+        # dispatch a second science workflow.
+        return _displacement_response(active)
     values = {
         "owner_uid": owner_uid,
         "idempotency_key": request.idempotency_key,
@@ -338,6 +347,12 @@ def create_displacement_job(request: CreateDisplacementJobRequest, user: dict = 
     try:
         record = store.create_displacement_job(values)
     except PersistenceError:
+        try:
+            active = store.find_active_displacement_job(owner_uid, request.aoi_wkt, request.start_date.isoformat(), request.end_date.isoformat())
+        except PersistenceError:
+            active = None
+        if active:
+            return _displacement_response(active)
         raise HTTPException(status_code=503, detail="Could not persist the displacement job.") from None
     job_id = UUID(str(record["id"]))
     try:
@@ -357,6 +372,72 @@ def create_displacement_job(request: CreateDisplacementJobRequest, user: dict = 
     except PersistenceError:
         raise HTTPException(status_code=503, detail="GitHub Actions accepted the job but its dispatch status could not be persisted.") from None
     return _displacement_response(record)
+
+
+@app.post("/api/displacement-jobs", response_model=DisplacementJobResponse)
+def create_displacement_job(request: CreateDisplacementJobRequest, user: dict = Depends(get_current_user)) -> DisplacementJobResponse:
+    _validate_displacement_request(request)
+    return _create_and_dispatch_displacement_job(_required_owner_uid(user), request, _require_store())
+
+
+@app.get("/api/displacement-jobs", response_model=list[DisplacementJobResponse])
+def list_displacement_jobs(user: dict = Depends(get_current_user)) -> list[DisplacementJobResponse]:
+    try:
+        records = _require_store().list_displacement_jobs(_required_owner_uid(user))
+    except PersistenceError:
+        raise HTTPException(status_code=503, detail="Could not list displacement jobs.") from None
+    return [_displacement_response(record) for record in records]
+
+
+@app.post("/api/displacement-jobs/{job_id}/resubmit", response_model=DisplacementJobResponse)
+def resubmit_displacement_job(
+    job_id: UUID, request: ResubmitDisplacementJobRequest, user: dict = Depends(get_current_user),
+) -> DisplacementJobResponse:
+    """Cancel one active workflow, then submit a replacement from its stored inputs."""
+    owner_uid = _required_owner_uid(user)
+    store = _require_store()
+    try:
+        current = store.get_displacement_job(owner_uid, job_id)
+    except PersistenceError:
+        raise HTTPException(status_code=503, detail="Could not read the current displacement job.") from None
+    if not current:
+        raise HTTPException(status_code=404, detail="Displacement job was not found for this user.")
+    if current.get("state") not in {JobState.DISPATCHING.value, JobState.RUNNING.value}:
+        raise HTTPException(status_code=409, detail="Only a currently dispatched or running job can be replaced.")
+
+    settings = get_settings()
+    run_id = current.get("github_run_id")
+    if not run_id:
+        discovered = find_dispatched_workflow_run(settings, job_id)
+        if not discovered:
+            raise HTTPException(status_code=409, detail="The current workflow has not been allocated by GitHub yet. Wait a moment and try refresh again; no replacement was created.")
+        run_id, run_url, run_status, _conclusion = discovered
+        if run_status == "completed":
+            raise HTTPException(status_code=409, detail="The current workflow already completed. Refresh its status before starting a new request.")
+        try:
+            current = store.update_displacement_job(job_id, {"github_run_id": run_id, "github_run_url": run_url})
+        except PersistenceError:
+            raise HTTPException(status_code=503, detail="Could not record the current GitHub Actions run.") from None
+
+    try:
+        cancel_workflow_run(settings, str(run_id))
+    except GitHubCancellationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    try:
+        store.update_displacement_job(job_id, {
+            "state": JobState.CANCELLED.value,
+            "stage": "cancelled_by_user",
+            "error_code": "CANCELLED_BY_USER",
+            "error_message": "Cancelled by the account owner before a confirmed resubmission.",
+        })
+    except PersistenceError:
+        raise HTTPException(status_code=503, detail="GitHub Actions was cancelled but the account job state could not be updated; no replacement was created.") from None
+
+    replacement = CreateDisplacementJobRequest(
+        aoi_wkt=str(current["aoi_wkt"]), start_date=current["start_date"], end_date=current["end_date"],
+        idempotency_key=request.idempotency_key,
+    )
+    return _create_and_dispatch_displacement_job(owner_uid, replacement, store)
 
 
 @app.get("/api/displacement-jobs/{job_id}", response_model=DisplacementJobResponse)

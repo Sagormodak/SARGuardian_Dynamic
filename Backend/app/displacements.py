@@ -76,7 +76,18 @@ class WorkerCallback(BaseModel):
     artifact_url: str | None = Field(default=None, max_length=2_048)
 
 
+class ResubmitDisplacementJobRequest(BaseModel):
+    """An explicit, user-confirmed replacement of one active job."""
+
+    idempotency_key: str = Field(min_length=16, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    confirm: Literal[True]
+
+
 class GitHubDispatchError(RuntimeError):
+    pass
+
+
+class GitHubCancellationError(RuntimeError):
     pass
 
 
@@ -107,6 +118,31 @@ def dispatch_workflow(settings: RuntimeSettings, job_id: UUID, request: CreateDi
         raise GitHubDispatchError(f"GitHub Actions dispatch was rejected ({exc.code}){suffix}.") from None
     except (URLError, TimeoutError):
         raise GitHubDispatchError("Could not reach GitHub Actions to dispatch the workflow.") from None
+
+
+def cancel_workflow_run(settings: RuntimeSettings, run_id: str) -> None:
+    """Ask GitHub to cancel an already allocated run before replacing its job.
+
+    The caller must not create a replacement if this cannot be confirmed.  That
+    avoids silently leaving an expensive science runner behind.
+    """
+    if not settings.displacement_actions_enabled:
+        raise GitHubCancellationError("Displacement processing is not configured on this server.")
+    endpoint = f"{settings.github_api_url}/repos/{settings.github_actions_repository}/actions/runs/{quote(run_id, safe='')}/cancel"
+    request = Request(endpoint, data=b"", method="POST", headers={
+        "Accept": "application/vnd.github+json", "Authorization": f"Bearer {settings.github_actions_token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    })
+    try:
+        with urlopen(request, timeout=15) as response:
+            if response.status != 202:
+                raise GitHubCancellationError("GitHub Actions did not accept cancellation of the current workflow.")
+    except HTTPError as exc:
+        if exc.code in {409, 422}:
+            raise GitHubCancellationError("The current GitHub Actions run is no longer cancellable. Refresh its status before trying again.") from None
+        raise GitHubCancellationError(f"GitHub Actions rejected workflow cancellation ({exc.code}).") from None
+    except (URLError, TimeoutError):
+        raise GitHubCancellationError("Could not reach GitHub Actions to cancel the current workflow.") from None
 
 
 def callback_signature_is_valid(secret: str, body: bytes, signature: str | None) -> bool:

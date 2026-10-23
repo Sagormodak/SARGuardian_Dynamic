@@ -15,32 +15,41 @@ from fastapi.testclient import TestClient
 from app import main as main_module
 from app.auth import get_current_user
 from app.config import get_settings
-from app.displacements import CreateDisplacementJobRequest, GitHubDispatchError, dispatch_workflow, find_dispatched_workflow_run, is_dispatch_timed_out
+from app.displacements import CreateDisplacementJobRequest, GitHubDispatchError, cancel_workflow_run, dispatch_workflow, find_dispatched_workflow_run, is_dispatch_timed_out
 from app.main import app
 
 
 class DisplacementStore:
     def __init__(self) -> None:
+        self.rows: list[dict] = []
         self.row: dict | None = None
 
     def get_displacement_job_by_idempotency(self, _owner, key):
-        return self.row if self.row and self.row["idempotency_key"] == key else None
+        return next((row for row in self.rows if row["owner_uid"] == _owner and row["idempotency_key"] == key), None)
 
     def create_displacement_job(self, values):
         now = datetime.now(UTC).isoformat()
         self.row = values | {"id": str(uuid4()), "created_at": now, "updated_at": now, "github_run_id": None, "github_run_url": None, "callback_sequence": 0, "error_code": None, "error_message": None}
+        self.rows.append(self.row)
         return self.row
+
+    def list_displacement_jobs(self, owner, limit=20):
+        return [row for row in reversed(self.rows) if row["owner_uid"] == owner][:limit]
+
+    def find_active_displacement_job(self, owner, aoi_wkt, start_date, end_date):
+        return next((row for row in reversed(self.rows) if row["owner_uid"] == owner and row["aoi_wkt"] == aoi_wkt and row["start_date"] == start_date and row["end_date"] == end_date and row["state"] in {"queued", "dispatching", "running"}), None)
 
     def update_displacement_job(self, job_id, values):
-        assert self.row and self.row["id"] == str(job_id)
-        self.row |= values
-        return self.row
+        row = next(row for row in self.rows if row["id"] == str(job_id))
+        row |= values
+        self.row = row
+        return row
 
     def get_displacement_job(self, owner, job_id):
-        return self.row if self.row and self.row["owner_uid"] == owner and self.row["id"] == str(job_id) else None
+        return next((row for row in self.rows if row["owner_uid"] == owner and row["id"] == str(job_id)), None)
 
     def get_displacement_job_unscoped(self, job_id):
-        return self.row if self.row and self.row["id"] == str(job_id) else None
+        return next((row for row in self.rows if row["id"] == str(job_id)), None)
 
 
 def client(monkeypatch, store: DisplacementStore) -> TestClient:
@@ -69,6 +78,56 @@ def test_displacement_job_is_durable_dispatched_and_owner_scoped(monkeypatch) ->
     assert response.json()["state"] == "dispatching"
     assert store.row and store.row["owner_uid"] == "firebase-user"
     assert client(monkeypatch, store).get(f"/api/displacement-jobs/{store.row['id']}").status_code == 200
+
+
+def test_account_job_list_and_duplicate_active_request_reuse_the_existing_job(monkeypatch) -> None:
+    store = DisplacementStore()
+    dispatched: list[str] = []
+    monkeypatch.setattr(main_module, "get_job_store", lambda: store)
+    monkeypatch.setattr(main_module, "dispatch_workflow", lambda _settings, job_id, _request: dispatched.append(str(job_id)))
+    app.dependency_overrides[get_current_user] = lambda: {"uid": "firebase-user"}
+    api = TestClient(app)
+
+    first = api.post("/api/displacement-jobs", json=payload())
+    duplicate = api.post("/api/displacement-jobs", json=payload() | {"idempotency_key": "displacement-test-002"})
+    listed = api.get("/api/displacement-jobs")
+
+    assert first.status_code == duplicate.status_code == listed.status_code == 200
+    assert duplicate.json()["id"] == first.json()["id"]
+    assert len(dispatched) == 1
+    assert [job["id"] for job in listed.json()] == [first.json()["id"]]
+
+
+def test_confirmed_resubmit_cancels_the_old_run_before_dispatching_one_replacement(monkeypatch) -> None:
+    store = DisplacementStore()
+    api = client(monkeypatch, store)
+    first = api.post("/api/displacement-jobs", json=payload()).json()
+    store.update_displacement_job(UUID(first["id"]), {"github_run_id": "123", "github_run_url": "https://github.com/example/run/123"})
+    cancelled: list[str] = []
+    monkeypatch.setattr(main_module, "get_settings", lambda: SimpleNamespace(displacement_actions_enabled=True))
+    monkeypatch.setattr(main_module, "cancel_workflow_run", lambda _settings, run_id: cancelled.append(run_id))
+
+    replacement = api.post(f"/api/displacement-jobs/{first['id']}/resubmit", json={"idempotency_key": "displacement-resubmit-001", "confirm": True})
+
+    assert replacement.status_code == 200, replacement.text
+    assert replacement.json()["id"] != first["id"]
+    assert cancelled == ["123"]
+    assert store.get_displacement_job("firebase-user", UUID(first["id"]))["state"] == "cancelled"
+    assert replacement.json()["state"] == "dispatching"
+
+
+def test_resubmit_does_not_create_a_replacement_until_github_allocates_the_old_run(monkeypatch) -> None:
+    store = DisplacementStore()
+    api = client(monkeypatch, store)
+    first = api.post("/api/displacement-jobs", json=payload()).json()
+    monkeypatch.setattr(main_module, "get_settings", lambda: SimpleNamespace(displacement_actions_enabled=True))
+    monkeypatch.setattr(main_module, "find_dispatched_workflow_run", lambda *_args: None)
+
+    response = api.post(f"/api/displacement-jobs/{first['id']}/resubmit", json={"idempotency_key": "displacement-resubmit-002", "confirm": True})
+
+    assert response.status_code == 409
+    assert len(store.rows) == 1
+    assert store.row and store.row["state"] == "dispatching"
 
 
 def test_worker_callback_requires_hmac_and_ordered_transitions(monkeypatch) -> None:
@@ -166,6 +225,31 @@ def test_dispatch_reports_the_safe_github_rejection_reason(monkeypatch) -> None:
         dispatch_workflow(settings, UUID("11111111-1111-1111-1111-111111111111"), CreateDisplacementJobRequest(**payload()))
 
 
+def test_cancel_workflow_run_uses_the_configured_repository(monkeypatch) -> None:
+    captured: dict = {}
+
+    class Response:
+        status = 202
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+
+    def fake_urlopen(request, timeout):
+        captured["url"] = request.full_url
+        captured["authorization"] = request.headers["Authorization"]
+        assert timeout == 15
+        return Response()
+
+    monkeypatch.setattr("app.displacements.urlopen", fake_urlopen)
+    settings = get_settings({
+        "DISPLACEMENT_ACTIONS_ENABLED": "true", "GITHUB_ACTIONS_TOKEN": "server-token",
+        "GITHUB_ACTIONS_REPOSITORY": "owner/repository",
+    })
+    cancel_workflow_run(settings, "987")
+
+    assert captured["url"].endswith("/repos/owner/repository/actions/runs/987/cancel")
+    assert captured["authorization"] == "Bearer server-token"
+
+
 def test_dispatch_timeout_only_applies_before_the_worker_starts() -> None:
     old = "2026-01-01T00:00:00Z"
     assert is_dispatch_timed_out({"state": "dispatching", "updated_at": old}, 300) is True
@@ -233,6 +317,12 @@ def test_displacement_migration_has_immutable_owner_scoped_job_schema() -> None:
     assert "displacement_jobs_transition_guard" in sql
     assert "callback_sequence" in sql
     assert "enable row level security" in sql
+
+
+def test_active_displacement_request_guard_migration_is_present() -> None:
+    sql = (__import__("pathlib").Path(main_module.__file__).parents[1] / "migrations" / "003_displacement_active_request_guard.sql").read_text(encoding="utf-8")
+    assert "create unique index" in sql
+    assert "where state in ('queued', 'dispatching', 'running')" in sql
 
 
 def test_displacement_workflow_initializes_runner_workspace_in_a_step() -> None:

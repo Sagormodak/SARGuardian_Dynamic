@@ -34,10 +34,10 @@ describe('displacement preparation route', () => {
     expect(push).toHaveBeenCalledTimes(3);
     expect(navigatePath(LANDSLIDE_PATH, path, push)).toBe('/landslide');
   });
-  it('shows automatic submission feedback when the map action initiated the route', () => {
+  it('does not submit automatically when the displacement page opens', () => {
     const preparation = prepareInvestigation({ coordinates: [[85, 27], [85.001, 27], [85, 27.001]], areaClosed: true, startDate: '2026-10-01', endDate: '2026-10-22', today: '2026-10-23' });
-    const html = renderToStaticMarkup(<DisplacementPreparation preparation={preparation} onBack={() => {}} user={user} autoStartRequest={1} />);
-    expect(html).toContain('Preparing displacement job');
-    expect(html).not.toContain('Start displacement processing');
+    const html = renderToStaticMarkup(<DisplacementPreparation preparation={preparation} onBack={() => {}} user={user} />);
+    expect(html).toContain('Start displacement processing');
+    expect(html).not.toContain('Preparing displacement job');
   });
 });

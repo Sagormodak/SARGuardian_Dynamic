@@ -219,6 +219,29 @@ export async function getDisplacementJob(jobId: string, user: Pick<User, 'getIdT
   );
 }
 
+export async function listDisplacementJobs(user: Pick<User, 'getIdToken'> | null): Promise<DisplacementJob[]> {
+  return readAuthenticatedPayload<DisplacementJob[]>(
+    `${API_BASE}/api/displacement-jobs`,
+    user,
+    'Could not load your displacement jobs.',
+  );
+}
+
+export async function resubmitDisplacementJob(
+  jobId: string,
+  idempotencyKey: string,
+  user: Pick<User, 'getIdToken'> | null,
+): Promise<DisplacementJob> {
+  const safeId = jobId.trim();
+  if (!safeId) throw new Error('A displacement job ID is required.');
+  return readAuthenticatedPayload<DisplacementJob>(
+    `${API_BASE}/api/displacement-jobs/${encodeURIComponent(safeId)}/resubmit`,
+    user,
+    'Could not replace the displacement job.',
+    { method: 'POST', body: JSON.stringify({ idempotency_key: idempotencyKey, confirm: true }) },
+  );
+}
+
 
 export type AoiWindowResponse = {
   service: string;

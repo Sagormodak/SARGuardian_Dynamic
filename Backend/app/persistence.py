@@ -62,6 +62,8 @@ class JobStore(Protocol):
     def get_job(self, owner_uid: str, job_id: UUID) -> dict[str, Any] | None: ...
     def get_displacement_job_by_idempotency(self, owner_uid: str, idempotency_key: str) -> dict[str, Any] | None: ...
     def create_displacement_job(self, values: dict[str, Any]) -> dict[str, Any]: ...
+    def list_displacement_jobs(self, owner_uid: str, limit: int = 20) -> list[dict[str, Any]]: ...
+    def find_active_displacement_job(self, owner_uid: str, aoi_wkt: str, start_date: str, end_date: str) -> dict[str, Any] | None: ...
     def get_displacement_job(self, owner_uid: str, job_id: UUID) -> dict[str, Any] | None: ...
     def get_displacement_job_unscoped(self, job_id: UUID) -> dict[str, Any] | None: ...
     def update_displacement_job(self, job_id: UUID, values: dict[str, Any]) -> dict[str, Any]: ...
@@ -200,6 +202,39 @@ class SupabaseJobStore:
         if not rows:
             raise PersistenceError("Displacement job persistence returned no record.")
         return rows[0]
+
+    def list_displacement_jobs(self, owner_uid: str, limit: int = 20) -> list[dict[str, Any]]:
+        try:
+            response = (
+                self.client.table("displacement_jobs")
+                .select("*")
+                .eq("owner_uid", owner_uid)
+                .order("created_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+        except Exception:
+            raise PersistenceError("Could not list displacement jobs.") from None
+        return self._data(response)
+
+    def find_active_displacement_job(self, owner_uid: str, aoi_wkt: str, start_date: str, end_date: str) -> dict[str, Any] | None:
+        try:
+            response = (
+                self.client.table("displacement_jobs")
+                .select("*")
+                .eq("owner_uid", owner_uid)
+                .eq("aoi_wkt", aoi_wkt)
+                .eq("start_date", start_date)
+                .eq("end_date", end_date)
+                .in_("state", ["queued", "dispatching", "running"])
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+        except Exception:
+            raise PersistenceError("Could not check for an active displacement job.") from None
+        rows = self._data(response)
+        return rows[0] if rows else None
 
     def get_displacement_job(self, owner_uid: str, job_id: UUID) -> dict[str, Any] | None:
         try:
