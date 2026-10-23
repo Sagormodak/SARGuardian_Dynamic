@@ -7,6 +7,7 @@ import re
 from datetime import UTC, date, datetime
 from typing import Any, Literal
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 from uuid import UUID
 
@@ -130,6 +131,49 @@ def workflow_run_status(settings: RuntimeSettings, run_id: str) -> tuple[str, st
     status = data.get("status")
     conclusion = data.get("conclusion")
     return (status, conclusion) if isinstance(status, str) and (isinstance(conclusion, str) or conclusion is None) else None
+
+
+def find_dispatched_workflow_run(
+    settings: RuntimeSettings, job_id: UUID,
+) -> tuple[str, str | None, str, str | None] | None:
+    """Find this job's dispatched run before a worker callback has recorded its run id.
+
+    GitHub accepts a workflow dispatch before allocating a runner.  Looking up the
+    run by its deterministic display title lets the API report a terminal runner
+    failure (including failures before the first callback) without ever treating
+    a GitHub success as a scientifically validated result.
+    """
+    workflow = quote(settings.github_actions_workflow, safe="")
+    endpoint = (
+        f"{settings.github_api_url}/repos/{settings.github_actions_repository}"
+        f"/actions/workflows/{workflow}/runs?event=workflow_dispatch&per_page=100"
+    )
+    request = Request(endpoint, headers={
+        "Accept": "application/vnd.github+json", "Authorization": f"Bearer {settings.github_actions_token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    })
+    try:
+        with urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError):
+        return None
+    runs = payload.get("workflow_runs") if isinstance(payload, dict) else None
+    expected_title = f"Displacement {job_id}"
+    if not isinstance(runs, list):
+        return None
+    for run in runs:
+        if not isinstance(run, dict) or run.get("display_title") != expected_title:
+            continue
+        run_id, run_url, status, conclusion = (
+            run.get("id"), run.get("html_url"), run.get("status"), run.get("conclusion"),
+        )
+        if not isinstance(run_id, (str, int)) or not isinstance(status, str):
+            return None
+        return (
+            str(run_id), run_url if isinstance(run_url, str) else None, status,
+            conclusion if isinstance(conclusion, str) else None,
+        )
+    return None
 
 
 def is_dispatch_timed_out(record: dict[str, Any], timeout_seconds: int) -> bool:

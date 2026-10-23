@@ -22,6 +22,7 @@ from .displacements import (
     WorkerCallback,
     callback_signature_is_valid,
     dispatch_workflow,
+    find_dispatched_workflow_run,
     is_dispatch_timed_out,
     workflow_run_status,
 )
@@ -368,6 +369,24 @@ def get_displacement_job(job_id: UUID, user: dict = Depends(get_current_user)) -
     if not record:
         raise HTTPException(status_code=404, detail="Displacement job was not found for this user.")
     settings = get_settings()
+    if settings.displacement_actions_enabled and record.get("state") == JobState.DISPATCHING.value:
+        discovered_run = find_dispatched_workflow_run(settings, job_id)
+        if discovered_run:
+            run_id, run_url, status, conclusion = discovered_run
+            updates = {"github_run_id": run_id, "github_run_url": run_url}
+            should_persist = (
+                run_id != record.get("github_run_id") or run_url != record.get("github_run_url")
+            )
+            if status == "completed":
+                code = "WORKER_CALLBACK_MISSING" if conclusion == "success" else "GITHUB_ACTIONS_WORKER_FAILED"
+                message = "GitHub Actions completed without a verified success callback." if conclusion == "success" else "GitHub Actions reported a terminal worker failure before its startup callback."
+                updates |= {"state": JobState.FAILED.value, "stage": "terminal_validation_failed", "error_code": code, "error_message": message}
+                should_persist = True
+            if should_persist:
+                try:
+                    record = store.update_displacement_job(job_id, updates)
+                except PersistenceError:
+                    raise HTTPException(status_code=503, detail="Could not persist the discovered workflow state.") from None
     if is_dispatch_timed_out(record, settings.displacement_dispatch_timeout_seconds):
         try:
             record = store.update_displacement_job(job_id, {"state": JobState.FAILED.value, "stage": "start_timeout", "error_code": "WORKFLOW_START_TIMEOUT", "error_message": "The workflow did not report a start before the configured timeout."})
