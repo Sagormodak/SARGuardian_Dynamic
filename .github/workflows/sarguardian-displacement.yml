@@ -47,6 +47,9 @@ jobs:
       EARTHDATA_USERNAME: ${{ secrets.EARTHDATA_USERNAME }}
       EARTHDATA_PASSWORD: ${{ secrets.EARTHDATA_PASSWORD }}
       EARTHDATA_TOKEN: ${{ secrets.EARTHDATA_TOKEN }}
+      GOOGLE_DRIVE_OAUTH_CLIENT_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_CLIENT_JSON }}
+      GOOGLE_DRIVE_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_REFRESH_TOKEN }}
+      GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
     steps:
       - name: Checkout Dynamic workflow revision
         uses: actions/checkout@v4
@@ -78,6 +81,9 @@ jobs:
             test -n "$EARTHDATA_USERNAME"
             test -n "$EARTHDATA_PASSWORD"
           fi
+          test -n "$GOOGLE_DRIVE_OAUTH_CLIENT_JSON"
+          test -n "$GOOGLE_DRIVE_REFRESH_TOKEN"
+          test -n "$GOOGLE_DRIVE_FOLDER_ID"
 
       - name: Set up pinned science runtime
         uses: actions/setup-python@v5
@@ -85,7 +91,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install pinned science dependencies
-        run: python -m pip install --disable-pip-version-check --no-cache-dir --requirement science-source/requirements.txt
+        run: python -m pip install --disable-pip-version-check --no-cache-dir --requirement science-source/requirements.txt "requests>=2.32,<3"
 
       - name: Report running state
         shell: bash
@@ -149,6 +155,18 @@ jobs:
                   raise SystemExit("A validated output checksum does not match its manifest.")
           PY
 
+      - name: Publish validated result package to Google Drive
+        shell: bash
+        run: |
+          set -euo pipefail
+          drive_result="$(python "$GITHUB_WORKSPACE/Backend/science_adapter/upload_to_drive.py" \
+            --work-dir "$SARGUARDIAN_WORK_DIR")"
+          case "$drive_result" in
+            DRIVE_RESULT_URL=https://drive.google.com/drive/folders/*) ;;
+            *) echo 'Google Drive publisher did not return a valid result URL.' >&2; exit 1 ;;
+          esac
+          printf '%s\n' "$drive_result" >> "$GITHUB_ENV"
+
       - name: Upload verified result manifest
         if: success()
         uses: actions/upload-artifact@v4
@@ -187,7 +205,7 @@ jobs:
           if [ -f "$SARGUARDIAN_WORK_DIR/processing-callback-ack" ]; then sequence=3; elif [ -f "$SARGUARDIAN_WORK_DIR/running-callback-ack" ]; then sequence=2; else sequence=1; fi
           if [ "$state" = succeeded ]; then
             summary="$(jq -c '{analysis_type,scientific_limit,selected_product_count,estimated_download_gib,products}' "$SARGUARDIAN_WORK_DIR/result-manifest.json")"
-            artifact_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            artifact_url="$DRIVE_RESULT_URL"
           else
             summary='null'
             artifact_url=''
