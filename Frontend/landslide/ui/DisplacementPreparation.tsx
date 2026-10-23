@@ -25,11 +25,15 @@ function chooseAccountJob(jobs: DisplacementJob[], preparation: PreparedInvestig
       && candidate.start_date === preparation.payload.start_date
       && candidate.end_date === preparation.payload.end_date)
     : [];
-  // Only an active task is resumable. A cancelled/failed/completed record is
-  // history, not the current request, so it must never prevent the account
-  // owner from starting a fresh request from the map.
+  // New requests are created on the map, so a completed account task is safe
+  // to resume here after a browser refresh. Cancellation still returns the
+  // user to the map immediately and is deliberately not resumed as a task.
   return matching.find((candidate) => activeStates.has(candidate.state))
     || jobs.find((candidate) => activeStates.has(candidate.state))
+    || matching.find((candidate) => candidate.state === 'succeeded')
+    || jobs.find((candidate) => candidate.state === 'succeeded')
+    || matching.find((candidate) => candidate.state === 'failed')
+    || jobs.find((candidate) => candidate.state === 'failed')
     || null;
 }
 
@@ -40,6 +44,8 @@ export function DisplacementPreparation({ preparation, onBack, onTaskActivityCha
   const [accountLoaded, setAccountLoaded] = useState(false);
   const [showResubmitConfirmation, setShowResubmitConfirmation] = useState(false);
   const [clock, setClock] = useState(() => Date.now());
+  const jobId = job?.id;
+  const hasActiveJob = Boolean(job && activeStates.has(job.state));
 
   const loadAccountJob = useCallback(async () => {
     setJobError('');
@@ -57,23 +63,23 @@ export function DisplacementPreparation({ preparation, onBack, onTaskActivityCha
   useEffect(() => { void loadAccountJob(); }, [loadAccountJob]);
 
   useEffect(() => {
-    if (!job || !activeStates.has(job.state)) return;
+    if (!jobId || !hasActiveJob) return undefined;
     const timer = window.setInterval(() => {
-      void getDisplacementJob(job.id, user)
+      void getDisplacementJob(jobId, user)
         .then(setJob)
         .catch((error: unknown) => setJobError(error instanceof Error ? error.message : 'Could not refresh the displacement job.'));
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [job, user]);
+  }, [hasActiveJob, jobId, user]);
 
   // The displayed elapsed time is local UI state, not a server poll. Keep it
   // smooth without turning the account-status API into a once-per-second poll.
   useEffect(() => {
-    if (!job || !activeStates.has(job.state)) return undefined;
+    if (!hasActiveJob) return undefined;
     setClock(Date.now());
     const timer = window.setInterval(() => setClock(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [job]);
+  }, [hasActiveJob]);
 
   useEffect(() => {
     if (job) onTaskActivityChange(activeStates.has(job.state));
@@ -119,7 +125,6 @@ export function DisplacementPreparation({ preparation, onBack, onTaskActivityCha
     }
   }, [busy, job, user]);
 
-  const hasActiveJob = Boolean(job && activeStates.has(job.state));
   if (!job && !jobError) return null;
 
   return <main className="nisar-results-main displacement-preparation">
