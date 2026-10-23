@@ -2,7 +2,7 @@ name: SARGuardian displacement processing
 
 run-name: Displacement ${{ inputs.job_id }}
 
-on:
+"on":
   workflow_dispatch:
     inputs:
       job_id:

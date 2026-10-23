@@ -97,7 +97,13 @@ def dispatch_workflow(settings: RuntimeSettings, job_id: UUID, request: CreateDi
             if response.status != 204:
                 raise GitHubDispatchError("GitHub Actions did not accept the displacement workflow.")
     except HTTPError as exc:
-        raise GitHubDispatchError(f"GitHub Actions dispatch was rejected ({exc.code}).") from None
+        try:
+            payload = json.loads(exc.read().decode("utf-8"))
+            message = payload.get("message") if isinstance(payload, dict) else None
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            message = None
+        suffix = f": {message[:200]}" if isinstance(message, str) and message else ""
+        raise GitHubDispatchError(f"GitHub Actions dispatch was rejected ({exc.code}){suffix}.") from None
     except (URLError, TimeoutError):
         raise GitHubDispatchError("Could not reach GitHub Actions to dispatch the workflow.") from None
 

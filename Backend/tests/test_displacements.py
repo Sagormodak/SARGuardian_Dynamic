@@ -3,15 +3,18 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+from io import BytesIO
 from datetime import UTC, datetime
+from urllib.error import HTTPError
 from uuid import UUID, uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app import main as main_module
 from app.auth import get_current_user
 from app.config import get_settings
-from app.displacements import CreateDisplacementJobRequest, dispatch_workflow, is_dispatch_timed_out
+from app.displacements import CreateDisplacementJobRequest, GitHubDispatchError, dispatch_workflow, is_dispatch_timed_out
 from app.main import app
 
 
@@ -145,6 +148,21 @@ def test_dispatch_uses_only_configured_server_values(monkeypatch) -> None:
         "job_id": "11111111-1111-1111-1111-111111111111", "aoi_wkt": payload()["aoi_wkt"],
         "start_date": "2026-10-01", "end_date": "2026-10-22", "callback_url": "https://api.example.test",
     }
+
+
+def test_dispatch_reports_the_safe_github_rejection_reason(monkeypatch) -> None:
+    def fake_urlopen(*_args, **_kwargs):
+        raise HTTPError("https://api.github.test", 422, "Unprocessable Content", hdrs=None, fp=BytesIO(b'{"message":"Workflow does not have workflow_dispatch trigger"}'))
+
+    monkeypatch.setattr("app.displacements.urlopen", fake_urlopen)
+    settings = get_settings({
+        "DISPLACEMENT_ACTIONS_ENABLED": "true", "GITHUB_ACTIONS_TOKEN": "server-token",
+        "GITHUB_ACTIONS_REPOSITORY": "owner/repository", "GITHUB_ACTIONS_WORKFLOW": "workflow.yml",
+        "GITHUB_ACTIONS_REF": "main", "DISPLACEMENT_CALLBACK_SECRET": "callback-secret",
+        "PUBLIC_API_URL": "https://api.example.test",
+    })
+    with pytest.raises(GitHubDispatchError, match="Workflow does not have workflow_dispatch trigger"):
+        dispatch_workflow(settings, UUID("11111111-1111-1111-1111-111111111111"), CreateDisplacementJobRequest(**payload()))
 
 
 def test_dispatch_timeout_only_applies_before_the_worker_starts() -> None:
