@@ -120,6 +120,21 @@ def test_adapter_prefers_an_explicit_earthdata_token_for_nisar_products(monkeypa
     assert seen["token"] == "test-edl-token"
 
 
+def test_adapter_reports_a_rejected_earthdata_token_without_echoing_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Session:
+        def auth_with_token(self, _token):
+            raise RuntimeError("Invalid/Expired token passed")
+
+    acquisition = SimpleNamespace()
+    monkeypatch.setenv("EARTHDATA_TOKEN", "secret-token-value")
+    monkeypatch.setitem(sys.modules, "asf_search", SimpleNamespace(ASFSession=Session))
+    adapter._install_earthdata_token_session(acquisition)
+
+    with pytest.raises(adapter.AdapterError, match="rejected or has expired") as error:
+        acquisition.build_session()
+    assert "secret-token-value" not in str(error.value)
+
+
 def test_adapter_rejects_a_direct_workflow_request_outside_the_api_date_limit(tmp_path: Path) -> None:
     source_root = tmp_path / "science"; source_root.mkdir()
     with pytest.raises(adapter.AdapterError, match="cannot exceed 90 days"):

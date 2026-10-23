@@ -107,6 +107,8 @@ def resolve_download_sizes(records: Iterable[dict[str, Any]], acquisition: Any) 
         if session is None:
             try:
                 session = acquisition.build_session()
+            except AdapterError:
+                raise
             except Exception as exc:
                 raise AdapterError("Could not initialize the authenticated ASF session for size validation.") from exc
         response: Any | None = None
@@ -144,7 +146,14 @@ def _install_earthdata_token_session(acquisition: Any) -> None:
         raise AdapterError("The pinned ASF client is unavailable for Earthdata token authentication.") from exc
 
     def build_session() -> Any:
-        return asf.ASFSession().auth_with_token(token)
+        try:
+            return asf.ASFSession().auth_with_token(token)
+        except Exception as exc:
+            # The upstream client uses this exact safe message for a bad EDL
+            # token.  Do not include exception data that could contain a token.
+            if "Invalid/Expired token passed" in str(exc):
+                raise AdapterError("Earthdata token was rejected or has expired.") from exc
+            raise AdapterError("Earthdata token authentication failed; authorize the ASF application and generate a new token.") from exc
 
     acquisition.build_session = build_session
 
