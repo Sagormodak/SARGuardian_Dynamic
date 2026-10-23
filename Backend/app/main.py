@@ -440,13 +440,27 @@ def cancel_displacement_job(job_id: UUID, user: dict = Depends(get_current_user)
 def resubmit_displacement_job(
     job_id: UUID, request: ResubmitDisplacementJobRequest, user: dict = Depends(get_current_user),
 ) -> DisplacementJobResponse:
-    """Cancel one active workflow, then submit a replacement from its stored inputs."""
+    """Retry a failed job or replace an active workflow from immutable stored inputs."""
     owner_uid = _required_owner_uid(user)
     store = _require_store()
-    current = _cancel_active_displacement_job(owner_uid, job_id, store)
+    try:
+        current = store.get_displacement_job(owner_uid, job_id)
+    except PersistenceError:
+        raise HTTPException(status_code=503, detail="Could not read the current displacement job.") from None
+    if not current:
+        raise HTTPException(status_code=404, detail="Displacement job was not found for this user.")
+
+    if current.get("state") == JobState.FAILED.value:
+        # A failed job has no active worker to cancel. Its stored WKT and dates
+        # remain the sole source for a retry, preventing payload substitution.
+        source = current
+    elif current.get("state") in {JobState.DISPATCHING.value, JobState.RUNNING.value}:
+        source = _cancel_active_displacement_job(owner_uid, job_id, store)
+    else:
+        raise HTTPException(status_code=409, detail="Only a failed, dispatched, or running job can be retried or refreshed.")
 
     replacement = CreateDisplacementJobRequest(
-        aoi_wkt=str(current["aoi_wkt"]), start_date=current["start_date"], end_date=current["end_date"],
+        aoi_wkt=str(source["aoi_wkt"]), start_date=source["start_date"], end_date=source["end_date"],
         idempotency_key=request.idempotency_key,
     )
     return _create_and_dispatch_displacement_job(owner_uid, replacement, store)

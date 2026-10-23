@@ -130,6 +130,21 @@ def test_resubmit_does_not_create_a_replacement_until_github_allocates_the_old_r
     assert store.row and store.row["state"] == "dispatching"
 
 
+def test_failed_job_can_be_retried_from_its_immutable_stored_request(monkeypatch) -> None:
+    store = DisplacementStore()
+    api = client(monkeypatch, store)
+    first = api.post("/api/displacement-jobs", json=payload()).json()
+    store.update_displacement_job(UUID(first["id"]), {"state": "failed", "stage": "science_failed"})
+
+    replacement = api.post(f"/api/displacement-jobs/{first['id']}/resubmit", json={"idempotency_key": "displacement-retry-001", "confirm": True})
+
+    assert replacement.status_code == 200, replacement.text
+    assert replacement.json()["id"] != first["id"]
+    assert replacement.json()["state"] == "dispatching"
+    assert replacement.json()["aoi_wkt"] == payload()["aoi_wkt"]
+    assert len(store.rows) == 2
+
+
 def test_account_owner_can_cancel_an_active_job_without_creating_a_replacement(monkeypatch) -> None:
     store = DisplacementStore()
     api = client(monkeypatch, store)

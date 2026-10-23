@@ -125,6 +125,21 @@ export function DisplacementPreparation({ preparation, onBack, onTaskActivityCha
     }
   }, [busy, job, user]);
 
+  const retryFailed = useCallback(async () => {
+    if (!job || job.state !== 'failed' || busy) return;
+    setBusy(true);
+    setJobError('');
+    try {
+      const replacement = await resubmitDisplacementJob(job.id, crypto.randomUUID(), user);
+      setJob(replacement);
+      onTaskActivityChange(true);
+    } catch (error) {
+      setJobError(error instanceof Error ? error.message : 'Could not retry the displacement job.');
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, job, onTaskActivityChange, user]);
+
   if (!job && !jobError) return null;
 
   return <main className="nisar-results-main displacement-preparation">
@@ -141,6 +156,7 @@ export function DisplacementPreparation({ preparation, onBack, onTaskActivityCha
           <button type="button" className="demo-button danger-button" disabled={busy} onClick={() => void cancel()}>{busy ? 'Cancelling…' : 'Cancel task'}</button>
           <button type="button" className="investigate-button" disabled={busy} onClick={() => setShowResubmitConfirmation(true)}>Refresh task</button>
         </div>}
+        {job.state === 'failed' && <button type="button" className="investigate-button" disabled={busy} onClick={() => void retryFailed()}>{busy ? 'Retrying…' : 'Retry task'}</button>}
         {job.state === 'succeeded' && job.artifact_url && <p><a className="investigate-button validated-output-link" href={job.artifact_url} target="_blank" rel="noreferrer">Open validated output</a></p>}
       </section>}
 
