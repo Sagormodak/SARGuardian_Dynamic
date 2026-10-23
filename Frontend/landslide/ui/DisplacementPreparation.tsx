@@ -93,13 +93,18 @@ export function DisplacementPreparation({ preparation, onBack, onTaskActivityCha
     setBusy(true);
     setJobError('');
     try {
-      setJob(await cancelDisplacementJob(job.id, user));
+      const cancelled = await cancelDisplacementJob(job.id, user);
+      setJob(cancelled);
+      if (cancelled.state === 'cancelled' && cancelled.stage === 'cancelled_by_user') {
+        onTaskActivityChange(false);
+        onBack();
+      }
     } catch (error) {
       setJobError(error instanceof Error ? error.message : 'Could not cancel the displacement job.');
     } finally {
       setBusy(false);
     }
-  }, [busy, job, user]);
+  }, [busy, job, onBack, onTaskActivityChange, user]);
 
   const confirmResubmit = useCallback(async () => {
     if (!job || !activeStates.has(job.state) || busy) return;
@@ -117,19 +122,15 @@ export function DisplacementPreparation({ preparation, onBack, onTaskActivityCha
   }, [busy, job, user]);
 
   const hasActiveJob = Boolean(job && activeStates.has(job.state));
-  const canReturnToMap = job?.state === 'cancelled' && job.stage === 'cancelled_by_user';
   return <main className="nisar-results-main displacement-preparation">
     <section className="nisar-results-summary">
       <span className="result-kicker">DISPLACEMENT PROCESSING</span>
       <h1>Find Displacements</h1>
       <p>Your processing task belongs to this signed-in account and continues if you close the browser. Reopen this page to see its current state.</p>
-      {canReturnToMap && <button type="button" className="demo-button" onClick={onBack}>Back to map</button>}
-
       {job && <section className="displacement-job-status" aria-live="polite">
         <h2>Processing status</h2>
         <p><b>Status:</b> {job.state}</p><p><b>Job ID:</b> {job.id}</p>
         <p><b>Stage:</b> {job.stage}</p><p><b>Submitted:</b> {new Date(job.created_at).toLocaleString()} · {elapsed(job.created_at)}</p>
-        {job.github_run_url && <p><a href={job.github_run_url} target="_blank" rel="noreferrer">Open GitHub Actions run</a></p>}
         {job.error_message && <p role="alert">{job.error_message}</p>}
         {hasActiveJob && <div className="displacement-task-actions">
           <button type="button" className="demo-button danger-button" disabled={busy} onClick={() => void cancel()}>{busy ? 'Cancelling…' : 'Cancel task'}</button>

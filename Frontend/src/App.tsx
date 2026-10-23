@@ -54,7 +54,10 @@ function App() {
   }, [refreshDisplacementTaskState, user]);
 
   useEffect(() => {
-    if (hasActiveDisplacementTask && !isLandslideDisplacementRoute(pathname)) {
+    // The account task may continue while the user visits Home. Only the map
+    // workspace is locked because changing its AOI during an active task would
+    // be misleading; the durable status route stays available.
+    if (hasActiveDisplacementTask && pathname === LANDSLIDE_PATH) {
       navigateTo(LANDSLIDE_DISPLACEMENT_PATH);
     }
   }, [hasActiveDisplacementTask, navigateTo, pathname]);
