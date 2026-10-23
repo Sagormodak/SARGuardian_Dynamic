@@ -27,8 +27,10 @@ def test_selection_requires_both_pair_acquisitions_inside_the_requested_window()
     assert [item["granule"] for item in selected] == ["NISAR_L2_PR_GUNW_example"]
 
 
-def test_selection_refuses_unknown_size_and_download_budget_excess() -> None:
-    assert adapter.select_eligible_products([record("2026-10-01", "2026-10-13", size_mb=0)], date(2026, 10, 1), date(2026, 10, 22)) == []
+def test_selection_allows_unknown_size_until_it_is_validated_and_enforces_the_budget() -> None:
+    assert adapter.select_eligible_products([record("2026-10-01", "2026-10-13", size_mb=0)], date(2026, 10, 1), date(2026, 10, 22))
+    with pytest.raises(adapter.AdapterError, match="no validated download size"):
+        adapter.enforce_download_budget([record("2026-10-01", "2026-10-13", size_mb=0)], 1)
     with pytest.raises(adapter.AdapterError, match="exceeding"):
         adapter.enforce_download_budget([record("2026-10-01", "2026-10-13", size_mb=2048)], 1)
 
@@ -51,7 +53,7 @@ def test_adapter_normalizes_list_asf_responses_for_the_pinned_source() -> None:
 def test_adapter_flattens_asf_product_batches_without_dropping_records() -> None:
     class Acquisition:
         def _get(self, _url):
-            return [[{"granuleName": "NISAR_first"}], [{"granuleName": "NISAR_second"}]]
+            return [[{"granuleName": "NISAR_first", "processingLevel": "GUNW", "relativeOrbit": 98}], [{"granuleName": "NISAR_second", "processingLevel": "GOFF", "track": 48}]]
 
         def asf_query(self):
             body = self._get("https://asf.example.test")
@@ -61,7 +63,8 @@ def test_adapter_flattens_asf_product_batches_without_dropping_records() -> None
     adapter._install_asf_response_compatibility(acquisition)
 
     assert acquisition.asf_query() == [
-        {"granuleName": "NISAR_first"}, {"granuleName": "NISAR_second"},
+        {"granuleName": "NISAR_first", "processingLevel": "GUNW", "relativeOrbit": 98, "productType": "GUNW", "path": 98},
+        {"granuleName": "NISAR_second", "processingLevel": "GOFF", "track": 48, "productType": "GOFF", "path": 48},
     ]
 
 
@@ -71,6 +74,29 @@ def test_adapter_rejects_invalid_asf_response_shape() -> None:
 
     with pytest.raises(adapter.AdapterError, match="invalid product record"):
         acquisition._get("https://asf.example.test")
+
+
+def test_adapter_resolves_unknown_size_with_an_authenticated_head_request() -> None:
+    seen: dict[str, object] = {}
+
+    class Response:
+        headers = {"Content-Length": str(3 * 1024 * 1024)}
+        def raise_for_status(self): pass
+        def close(self): seen["closed"] = True
+
+    class Session:
+        def head(self, url, **kwargs):
+            seen["request"] = (url, kwargs)
+            return Response()
+
+    class Acquisition:
+        def build_session(self): return Session()
+
+    resolved = adapter.resolve_download_sizes([record("2026-10-01", "2026-10-13", size_mb=0)], Acquisition())
+
+    assert resolved[0]["size_mb"] == 3
+    assert seen["request"][1] == {"allow_redirects": True, "timeout": 60}
+    assert seen["closed"] is True
 
 
 def test_adapter_rejects_a_direct_workflow_request_outside_the_api_date_limit(tmp_path: Path) -> None:

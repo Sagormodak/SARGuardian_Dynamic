@@ -69,7 +69,6 @@ def select_eligible_products(records: Iterable[dict[str, Any]], start_date: date
         and isinstance(record.get("secondary"), date)
         and start_date <= record["reference"] <= record["secondary"] <= end_date
         and isinstance(record.get("url"), str) and record["url"]
-        and isinstance(record.get("size_mb"), (int, float)) and record["size_mb"] > 0
     ]
     selected.sort(key=lambda item: (item["secondary"], item["reference"], item["productType"], item["granule"]))
     return selected
@@ -78,10 +77,53 @@ def select_eligible_products(records: Iterable[dict[str, Any]], start_date: date
 def enforce_download_budget(records: Iterable[dict[str, Any]], max_download_gib: float) -> float:
     if max_download_gib <= 0:
         raise AdapterError("Maximum download budget must be positive.")
-    total_gib = sum(float(record["size_mb"]) for record in records) / 1024
+    sizes_mb: list[float] = []
+    for record in records:
+        size_mb = record.get("size_mb")
+        if not isinstance(size_mb, (int, float)) or size_mb <= 0:
+            raise AdapterError("A selected product has no validated download size.")
+        sizes_mb.append(float(size_mb))
+    total_gib = sum(sizes_mb) / 1024
     if total_gib > max_download_gib:
         raise AdapterError(f"Selected products require {total_gib:.2f} GiB, exceeding the configured {max_download_gib:.2f} GiB worker budget.")
     return total_gib
+
+
+def resolve_download_sizes(records: Iterable[dict[str, Any]], acquisition: Any) -> list[dict[str, Any]]:
+    """Resolve missing catalogue sizes before enforcing the hard download limit.
+
+    Current ASF NISAR catalogue responses may omit ``sizeMB``.  Use the pinned
+    source's authenticated ASF session to make a HEAD-only request to the final
+    data URL, then require a positive Content-Length.  A missing or invalid size
+    remains a safe failure; it can never bypass the configured download budget.
+    """
+    session: Any | None = None
+    resolved: list[dict[str, Any]] = []
+    for record in records:
+        size_mb = record.get("size_mb")
+        if isinstance(size_mb, (int, float)) and size_mb > 0:
+            resolved.append(record)
+            continue
+        if session is None:
+            try:
+                session = acquisition.build_session()
+            except Exception as exc:
+                raise AdapterError("Could not initialize the authenticated ASF session for size validation.") from exc
+        response: Any | None = None
+        try:
+            response = session.head(str(record["url"]), allow_redirects=True, timeout=60)
+            response.raise_for_status()
+            content_length = response.headers.get("Content-Length")
+            byte_count = int(content_length) if isinstance(content_length, str) and content_length.isdigit() else 0
+        except Exception as exc:
+            raise AdapterError("Could not validate the download size for a selected ASF product.") from exc
+        finally:
+            if response is not None:
+                response.close()
+        if byte_count <= 0:
+            raise AdapterError("ASF did not provide a valid Content-Length for a selected product.")
+        resolved.append(record | {"size_mb": byte_count / (1024 * 1024)})
+    return resolved
 
 
 def _install_asf_response_compatibility(acquisition: Any) -> None:
@@ -96,15 +138,31 @@ def _install_asf_response_compatibility(acquisition: Any) -> None:
     """
     source_get = acquisition._get
 
+    def normalized_rows(rows: list[Any]) -> list[dict[str, Any]]:
+        if not all(isinstance(row, dict) for row in rows):
+            raise AdapterError("ASF catalogue returned a list containing an invalid product record.")
+        normalized: list[dict[str, Any]] = []
+        for row in rows:
+            normalized_row = dict(row)
+            product = row.get("productType") or row.get("processingLevel")
+            path = row.get("path")
+            if isinstance(product, str):
+                normalized_row["productType"] = product.upper()
+            if path is None:
+                path = row.get("relativeOrbit", row.get("track"))
+            if path is not None:
+                normalized_row["path"] = path
+            normalized.append(normalized_row)
+        return normalized
+
     def compatible_get(*args: Any, **kwargs: Any) -> dict[str, Any]:
         response = source_get(*args, **kwargs)
         if isinstance(response, list):
             if all(isinstance(row, dict) for row in response):
-                return {"results": response}
+                return {"results": normalized_rows(response)}
             if all(isinstance(batch, list) for batch in response):
                 rows = [row for batch in response for row in batch]
-                if all(isinstance(row, dict) for row in rows):
-                    return {"results": rows}
+                return {"results": normalized_rows(rows)}
             raise AdapterError("ASF catalogue returned a list containing an invalid product record.")
         if not isinstance(response, dict):
             raise AdapterError("ASF catalogue returned an unsupported JSON response type.")
@@ -113,7 +171,7 @@ def _install_asf_response_compatibility(acquisition: Any) -> None:
             not isinstance(results, list) or not all(isinstance(row, dict) for row in results)
         ):
             raise AdapterError("ASF catalogue returned an invalid results payload.")
-        return response
+        return response | ({"results": normalized_rows(results)} if isinstance(results, list) else {})
 
     acquisition._get = compatible_get
 
@@ -204,6 +262,8 @@ def run_job(job: JobInput) -> dict[str, Any]:
     selected = select_eligible_products(records, job.start_date, job.end_date)
     if not selected:
         raise AdapterError("No eligible GUNW or GOFF products have both acquisitions inside the requested date window.")
+    write_stage(job.work_dir, "resolving_download_sizes", selected_product_count=len(selected))
+    selected = resolve_download_sizes(selected, acquisition)
     download_gib = enforce_download_budget(selected, job.max_download_gib)
     product_results: list[dict[str, Any]] = []
     validated_outputs: list[dict[str, Any]] = []
