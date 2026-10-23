@@ -46,6 +46,7 @@ jobs:
       CALLBACK_SECRET: ${{ secrets.DISPLACEMENT_CALLBACK_SECRET }}
       EARTHDATA_USERNAME: ${{ secrets.EARTHDATA_USERNAME }}
       EARTHDATA_PASSWORD: ${{ secrets.EARTHDATA_PASSWORD }}
+      EARTHDATA_TOKEN: ${{ secrets.EARTHDATA_TOKEN }}
     steps:
       - name: Checkout Dynamic workflow revision
         uses: actions/checkout@v4
@@ -73,8 +74,10 @@ jobs:
           test -f science-source/src/goff_reader.py
           test -n "$CALLBACK_URL"
           test -n "$CALLBACK_SECRET"
-          test -n "$EARTHDATA_USERNAME"
-          test -n "$EARTHDATA_PASSWORD"
+          if [ -z "$EARTHDATA_TOKEN" ]; then
+            test -n "$EARTHDATA_USERNAME"
+            test -n "$EARTHDATA_PASSWORD"
+          fi
 
       - name: Set up pinned science runtime
         uses: actions/setup-python@v5

@@ -240,3 +240,5 @@ def test_displacement_workflow_initializes_runner_workspace_in_a_step() -> None:
     assert "SARGUARDIAN_WORK_DIR: ${{ runner.temp }}" not in workflow
     assert "Initialize isolated job workspace" in workflow
     assert "${RUNNER_TEMP}/sarguardian-displacement-${JOB_ID}" in workflow
+    assert "EARTHDATA_TOKEN: ${{ secrets.EARTHDATA_TOKEN }}" in workflow
+    assert 'if [ -z "$EARTHDATA_TOKEN" ]; then' in workflow

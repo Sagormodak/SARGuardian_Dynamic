@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
@@ -97,6 +98,26 @@ def test_adapter_resolves_unknown_size_with_an_authenticated_head_request() -> N
     assert resolved[0]["size_mb"] == 3
     assert seen["request"][1] == {"allow_redirects": True, "timeout": 60}
     assert seen["closed"] is True
+
+
+def test_adapter_prefers_an_explicit_earthdata_token_for_nisar_products(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, str] = {}
+
+    class Session:
+        def auth_with_token(self, token):
+            seen["token"] = token
+            return self
+
+    class SearchClient:
+        ASFSession = Session
+
+    acquisition = SimpleNamespace(build_session=lambda: (_ for _ in ()).throw(AssertionError("credential flow should not run")))
+    monkeypatch.setenv("EARTHDATA_TOKEN", "test-edl-token")
+    monkeypatch.setitem(sys.modules, "asf_search", SearchClient)
+    adapter._install_earthdata_token_session(acquisition)
+
+    assert isinstance(acquisition.build_session(), Session)
+    assert seen["token"] == "test-edl-token"
 
 
 def test_adapter_rejects_a_direct_workflow_request_outside_the_api_date_limit(tmp_path: Path) -> None:

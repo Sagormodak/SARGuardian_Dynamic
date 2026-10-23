@@ -126,6 +126,29 @@ def resolve_download_sizes(records: Iterable[dict[str, Any]], acquisition: Any) 
     return resolved
 
 
+def _install_earthdata_token_session(acquisition: Any) -> None:
+    """Prefer an explicit EDL token for GUNW/GOFF when one is configured.
+
+    ``asf_search.auth_with_creds`` additionally requests an ``asf-urs`` cookie.
+    The upstream client documents that cookie as necessary for certain products
+    such as SLC bursts, not these NISAR Level-2 products.  A scoped EDL user
+    token is authenticated by the upstream client and is passed to both the
+    HEAD size check and the source's existing download function.
+    """
+    token = os.getenv("EARTHDATA_TOKEN", "").strip()
+    if not token:
+        return
+    try:
+        import asf_search as asf
+    except ImportError as exc:  # pragma: no cover - workflow installs this dependency
+        raise AdapterError("The pinned ASF client is unavailable for Earthdata token authentication.") from exc
+
+    def build_session() -> Any:
+        return asf.ASFSession().auth_with_token(token)
+
+    acquisition.build_session = build_session
+
+
 def _install_asf_response_compatibility(acquisition: Any) -> None:
     """Adapt the pinned source's documented dict-or-list ASF JSON contract.
 
@@ -193,6 +216,7 @@ def _load_science_modules(science_root: Path, aoi_wkt: str) -> tuple[Any, Any, A
     goff = importlib.import_module("goff_reader")
     acquisition = importlib.import_module("nisar_acquisition")
     _install_asf_response_compatibility(acquisition)
+    _install_earthdata_token_session(acquisition)
     if "custom" not in gunw.AOIS:
         raise AdapterError("Pinned science source did not install the submitted custom AOI.")
     acquisition.set_aoi("custom")
