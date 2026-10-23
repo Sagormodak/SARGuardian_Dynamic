@@ -88,19 +88,24 @@ def _install_asf_response_compatibility(acquisition: Any) -> None:
     """Adapt the pinned source's documented dict-or-list ASF JSON contract.
 
     The pinned source annotates ``_get`` as returning ``dict | list``, but its
-    ``asf_query`` immediately calls ``.get``.  ASF currently returns a top-level
-    list for this query.  Normalizing only that list to the source's existing
-    ``{"results": [...]}`` shape preserves every catalogue record and lets the
-    original acquisition, filtering, and reader code remain authoritative.
+    ``asf_query`` immediately calls ``.get``.  ASF currently returns batches as
+    a top-level list of product lists for this query.  Normalizing only that
+    response to the source's existing ``{"results": [...]}`` shape preserves
+    every catalogue record and lets the original acquisition, filtering, and
+    reader code remain authoritative.
     """
     source_get = acquisition._get
 
     def compatible_get(*args: Any, **kwargs: Any) -> dict[str, Any]:
         response = source_get(*args, **kwargs)
         if isinstance(response, list):
-            if not all(isinstance(row, dict) for row in response):
-                raise AdapterError("ASF catalogue returned a list containing an invalid product record.")
-            return {"results": response}
+            if all(isinstance(row, dict) for row in response):
+                return {"results": response}
+            if all(isinstance(batch, list) for batch in response):
+                rows = [row for batch in response for row in batch]
+                if all(isinstance(row, dict) for row in rows):
+                    return {"results": rows}
+            raise AdapterError("ASF catalogue returned a list containing an invalid product record.")
         if not isinstance(response, dict):
             raise AdapterError("ASF catalogue returned an unsupported JSON response type.")
         results = response.get("results")

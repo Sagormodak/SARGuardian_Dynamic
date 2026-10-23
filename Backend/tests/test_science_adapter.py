@@ -48,6 +48,23 @@ def test_adapter_normalizes_list_asf_responses_for_the_pinned_source() -> None:
     assert acquisition.asf_query() == [{"granuleName": "NISAR_example"}]
 
 
+def test_adapter_flattens_asf_product_batches_without_dropping_records() -> None:
+    class Acquisition:
+        def _get(self, _url):
+            return [[{"granuleName": "NISAR_first"}], [{"granuleName": "NISAR_second"}]]
+
+        def asf_query(self):
+            body = self._get("https://asf.example.test")
+            return body.get("results", body if isinstance(body, list) else [])
+
+    acquisition = Acquisition()
+    adapter._install_asf_response_compatibility(acquisition)
+
+    assert acquisition.asf_query() == [
+        {"granuleName": "NISAR_first"}, {"granuleName": "NISAR_second"},
+    ]
+
+
 def test_adapter_rejects_invalid_asf_response_shape() -> None:
     acquisition = SimpleNamespace(_get=lambda _url: ["not-a-product"])
     adapter._install_asf_response_compatibility(acquisition)
