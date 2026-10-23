@@ -25,10 +25,11 @@ function chooseAccountJob(jobs: DisplacementJob[], preparation: PreparedInvestig
       && candidate.start_date === preparation.payload.start_date
       && candidate.end_date === preparation.payload.end_date)
     : [];
+  // Only an active task is resumable. A cancelled/failed/completed record is
+  // history, not the current request, so it must never prevent the account
+  // owner from starting a fresh request from the map.
   return matching.find((candidate) => activeStates.has(candidate.state))
-    || matching[0]
     || jobs.find((candidate) => activeStates.has(candidate.state))
-    || jobs[0]
     || null;
 }
 
