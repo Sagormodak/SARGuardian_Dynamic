@@ -129,23 +129,38 @@ def resolve_download_sizes(records: Iterable[dict[str, Any]], acquisition: Any) 
 
 
 def _install_earthdata_token_session(acquisition: Any) -> None:
-    """Prefer an explicit EDL token for GUNW/GOFF when one is configured.
+    """Build a cookie-free authenticated session for NISAR Level-2 products.
 
-    ``asf_search.auth_with_creds`` additionally requests an ``asf-urs`` cookie.
-    The upstream client documents that cookie as necessary for certain products
-    such as SLC bursts, not these NISAR Level-2 products.  A scoped EDL user
-    token is authenticated by the upstream client and is passed to both the
-    HEAD size check and the source's existing download function.
+    ``asf_search.auth_with_creds`` additionally requests an ``asf-urs`` cookie,
+    which the upstream client documents as necessary for certain products such
+    as SLC bursts, not these NISAR Level-2 products.  Prefer a normal EDL
+    username/password exchange to obtain the same bearer token without that
+    unrelated cookie step.  An explicit EDL token remains a fallback only when
+    credentials are not configured.
     """
+    username = os.getenv("EARTHDATA_USERNAME", "").strip()
+    password = os.getenv("EARTHDATA_PASSWORD", "")
     token = os.getenv("EARTHDATA_TOKEN", "").strip()
-    if not token:
+    if not ((username and password) or token):
         return
     try:
         import asf_search as asf
+        from requests.auth import HTTPBasicAuth
     except ImportError as exc:  # pragma: no cover - workflow installs this dependency
         raise AdapterError("The pinned ASF client is unavailable for Earthdata token authentication.") from exc
 
     def build_session() -> Any:
+        if username and password:
+            session = asf.ASFSession()
+            try:
+                session.auth = HTTPBasicAuth(username, password)
+                access_token = session._get_urs_access_token()
+            except Exception as exc:
+                raise AdapterError("Earthdata username/password authentication failed.") from exc
+            finally:
+                session.auth = None
+            session._update_edl_token(access_token)
+            return session
         try:
             return asf.ASFSession().auth_with_token(token)
         except Exception as exc:

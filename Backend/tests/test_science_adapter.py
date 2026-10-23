@@ -120,6 +120,37 @@ def test_adapter_prefers_an_explicit_earthdata_token_for_nisar_products(monkeypa
     assert seen["token"] == "test-edl-token"
 
 
+def test_adapter_prefers_validated_earthdata_credentials_over_a_federated_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    class Session:
+        auth = None
+
+        def _get_urs_access_token(self):
+            seen["auth"] = self.auth
+            return "access-token"
+
+        def _update_edl_token(self, token):
+            seen["access_token"] = token
+
+        def auth_with_token(self, _token):
+            raise AssertionError("federated token fallback should not run")
+
+    acquisition = SimpleNamespace()
+    monkeypatch.setenv("EARTHDATA_USERNAME", "edl-user")
+    monkeypatch.setenv("EARTHDATA_PASSWORD", "edl-password")
+    monkeypatch.setenv("EARTHDATA_TOKEN", "federated-token")
+    monkeypatch.setitem(sys.modules, "asf_search", SimpleNamespace(ASFSession=Session))
+    adapter._install_earthdata_token_session(acquisition)
+
+    session = acquisition.build_session()
+
+    assert isinstance(session, Session)
+    assert seen["auth"].username == "edl-user"
+    assert seen["access_token"] == "access-token"
+    assert session.auth is None
+
+
 def test_adapter_reports_a_rejected_earthdata_token_without_echoing_it(monkeypatch: pytest.MonkeyPatch) -> None:
     class Session:
         def auth_with_token(self, _token):
