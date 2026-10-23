@@ -6,14 +6,12 @@ import { isLandslideDisplacementRoute, LANDSLIDE_DISPLACEMENT_PATH, LANDSLIDE_PA
 
 describe('displacement preparation route', () => {
   const user = { getIdToken: vi.fn() } as never;
-  it('displays the real payload and submit boundary', () => {
+  it('keeps the AOI payload out of the processing screen', () => {
     const preparation = prepareInvestigation({ coordinates: [[85, 27], [85.001, 27], [85, 27.001]], areaClosed: true, startDate: '2026-10-01', endDate: '2026-10-22', today: '2026-10-23' });
     const html = renderToStaticMarkup(<DisplacementPreparation preparation={preparation} onBack={() => {}} user={user} />);
-    expect(html).toContain('POLYGON((85 27, 85.001 27, 85 27.001, 85 27))');
-    expect(html).toContain('2026-10-01');
-    expect(html).toContain('2026-10-22');
-    expect(html).toContain('Copy WKT');
-    expect(html).toContain('Copy Payload');
+    expect(html).not.toContain('POLYGON');
+    expect(html).not.toContain('Copy WKT');
+    expect(html).not.toContain('Copy Payload');
     expect(html).toContain('Start displacement processing');
     expect(html).toContain('Back to map');
   });

@@ -130,6 +130,23 @@ def test_resubmit_does_not_create_a_replacement_until_github_allocates_the_old_r
     assert store.row and store.row["state"] == "dispatching"
 
 
+def test_account_owner_can_cancel_an_active_job_without_creating_a_replacement(monkeypatch) -> None:
+    store = DisplacementStore()
+    api = client(monkeypatch, store)
+    first = api.post("/api/displacement-jobs", json=payload()).json()
+    store.update_displacement_job(UUID(first["id"]), {"github_run_id": "456"})
+    cancelled: list[str] = []
+    monkeypatch.setattr(main_module, "get_settings", lambda: SimpleNamespace(displacement_actions_enabled=True))
+    monkeypatch.setattr(main_module, "cancel_workflow_run", lambda _settings, run_id: cancelled.append(run_id))
+
+    response = api.post(f"/api/displacement-jobs/{first['id']}/cancel")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["state"] == "cancelled"
+    assert cancelled == ["456"]
+    assert len(store.rows) == 1
+
+
 def test_worker_callback_requires_hmac_and_ordered_transitions(monkeypatch) -> None:
     store = DisplacementStore()
     api = client(monkeypatch, store)

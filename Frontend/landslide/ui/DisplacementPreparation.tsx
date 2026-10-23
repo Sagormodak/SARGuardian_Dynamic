@@ -1,7 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { User } from 'firebase/auth';
-import { copyPreparation, type PreparedInvestigation } from '../engine/investigation';
-import { createDisplacementJob, getDisplacementJob, listDisplacementJobs, resubmitDisplacementJob, type DisplacementJob } from '../../src/api/catalog';
+import type { PreparedInvestigation } from '../engine/investigation';
+import {
+  cancelDisplacementJob,
+  createDisplacementJob,
+  getDisplacementJob,
+  listDisplacementJobs,
+  resubmitDisplacementJob,
+  type DisplacementJob,
+} from '../../src/api/catalog';
 
 const activeStates = new Set(['queued', 'dispatching', 'running']);
 
@@ -25,13 +32,11 @@ function chooseAccountJob(jobs: DisplacementJob[], preparation: PreparedInvestig
 }
 
 export function DisplacementPreparation({ preparation, onBack, user }: { preparation: PreparedInvestigation; onBack: () => void; user: User }) {
-  const [feedback, setFeedback] = useState('');
   const [busy, setBusy] = useState(false);
   const [job, setJob] = useState<DisplacementJob | null>(null);
   const [jobError, setJobError] = useState('');
   const [accountLoaded, setAccountLoaded] = useState(false);
   const [showResubmitConfirmation, setShowResubmitConfirmation] = useState(false);
-  const copying = useRef(false);
 
   const loadAccountJob = useCallback(async () => {
     setJobError('');
@@ -45,7 +50,7 @@ export function DisplacementPreparation({ preparation, onBack, user }: { prepara
     }
   }, [preparation, user]);
 
-  // This only reads account-persisted state. No page-load effect submits work.
+  // Browser refresh and reopening this route only read durable account state.
   useEffect(() => { void loadAccountJob(); }, [loadAccountJob]);
 
   useEffect(() => {
@@ -57,21 +62,6 @@ export function DisplacementPreparation({ preparation, onBack, user }: { prepara
     }, 5000);
     return () => window.clearInterval(timer);
   }, [job, user]);
-
-  const copy = async (kind: 'wkt' | 'payload') => {
-    if (!preparation.valid || copying.current) return;
-    copying.current = true;
-    setBusy(true);
-    try {
-      await copyPreparation(preparation.payload, kind, (text) => navigator.clipboard.writeText(text));
-      setFeedback(kind === 'wkt' ? 'WKT copied.' : 'Payload copied.');
-    } catch {
-      setFeedback('Copy failed. Select and copy the text below manually.');
-    } finally {
-      copying.current = false;
-      setBusy(false);
-    }
-  };
 
   const submit = useCallback(async () => {
     if (!preparation.valid || busy) return;
@@ -92,6 +82,19 @@ export function DisplacementPreparation({ preparation, onBack, user }: { prepara
     }
   }, [busy, preparation, user]);
 
+  const cancel = useCallback(async () => {
+    if (!job || !activeStates.has(job.state) || busy) return;
+    setBusy(true);
+    setJobError('');
+    try {
+      setJob(await cancelDisplacementJob(job.id, user));
+    } catch (error) {
+      setJobError(error instanceof Error ? error.message : 'Could not cancel the displacement job.');
+    } finally {
+      setBusy(false);
+    }
+  }, [busy, job, user]);
+
   const confirmResubmit = useCallback(async () => {
     if (!job || !activeStates.has(job.state) || busy) return;
     setBusy(true);
@@ -110,23 +113,10 @@ export function DisplacementPreparation({ preparation, onBack, user }: { prepara
   const hasActiveJob = Boolean(job && activeStates.has(job.state));
   return <main className="nisar-results-main displacement-preparation">
     <section className="nisar-results-summary">
-      <span className="result-kicker">DISPLACEMENT PREPARATION</span>
+      <span className="result-kicker">DISPLACEMENT PROCESSING</span>
       <h1>Find Displacements</h1>
-      <p>Processing belongs to your signed-in account and continues after this browser is closed. Returning to this page shows the latest saved job state.</p>
+      <p>Your processing task belongs to this signed-in account and continues if you close the browser. Reopen this page to see its current state.</p>
       <button type="button" className="demo-button" onClick={onBack}>Back to map</button>
-
-      {preparation.valid && <>
-        <dl className="preparation-dates"><div><dt>Start date</dt><dd>{preparation.payload.start_date}</dd></div><div><dt>End date</dt><dd>{preparation.payload.end_date}</dd></div></dl>
-        <h2>Selected AOI · WGS84</h2>
-        <button type="button" className="demo-button" disabled={busy} onClick={() => void copy('wkt')}>Copy WKT</button>
-        <pre tabIndex={0} aria-label="Selected AOI WKT"><code>{preparation.payload.aoi_wkt}</code></pre>
-        <h2>Analysis payload</h2>
-        <button type="button" className="demo-button" disabled={busy} onClick={() => void copy('payload')}>Copy Payload</button>
-        <pre tabIndex={0} aria-label="Displacement payload"><code>{JSON.stringify(preparation.payload, null, 2)}</code></pre>
-      </>}
-
-      {!hasActiveJob && preparation.valid && <button type="button" className="investigate-button" disabled={busy || !accountLoaded} onClick={() => void submit()}>{busy ? 'Submitting…' : 'Start displacement processing'}</button>}
-      {!preparation.valid && !job && <p role="alert">{preparation.errors.join(' ')} Return to the map to prepare a new request.</p>}
 
       {job && <section className="displacement-job-status" aria-live="polite">
         <h2>Processing status</h2>
@@ -134,22 +124,26 @@ export function DisplacementPreparation({ preparation, onBack, user }: { prepara
         <p><b>Stage:</b> {job.stage}</p><p><b>Submitted:</b> {new Date(job.created_at).toLocaleString()} · {elapsed(job.created_at)}</p>
         {job.github_run_url && <p><a href={job.github_run_url} target="_blank" rel="noreferrer">Open GitHub Actions run</a></p>}
         {job.error_message && <p role="alert">{job.error_message}</p>}
-        {hasActiveJob && <button type="button" className="demo-button" disabled={busy} onClick={() => setShowResubmitConfirmation(true)}>Refresh / resubmit</button>}
-        {job.state === 'succeeded' && <><p>Scientific workflow completed and reported validated per-product screening outputs.</p>
-          {job.result_summary && <pre tabIndex={0} aria-label="Validated output summary"><code>{JSON.stringify(job.result_summary, null, 2)}</code></pre>}
+        {hasActiveJob && <div className="displacement-task-actions">
+          <button type="button" className="demo-button danger-button" disabled={busy} onClick={() => void cancel()}>{busy ? 'Cancelling…' : 'Cancel task'}</button>
+          <button type="button" className="investigate-button" disabled={busy} onClick={() => setShowResubmitConfirmation(true)}>Refresh task</button>
+        </div>}
+        {job.state === 'succeeded' && <>{job.result_summary && <pre tabIndex={0} aria-label="Validated output summary"><code>{JSON.stringify(job.result_summary, null, 2)}</code></pre>}
           {job.artifact_url && <p><a href={job.artifact_url} target="_blank" rel="noreferrer">Open validated outputs</a></p>}</>}
       </section>}
 
+      {!job && preparation.valid && <button type="button" className="investigate-button" disabled={busy || !accountLoaded} onClick={() => void submit()}>{busy ? 'Submitting…' : 'Start displacement processing'}</button>}
+      {!job && !preparation.valid && <p role="alert">{accountLoaded ? 'No account task was found. Return to the map and choose an AOI and time window to begin.' : 'Loading your account task…'}</p>}
+
       {showResubmitConfirmation && job && <section className="displacement-resubmit-dialog" role="dialog" aria-modal="true" aria-labelledby="resubmit-title">
-        <h2 id="resubmit-title">Start a replacement workflow?</h2>
-        <p>This cancels the current GitHub Actions workflow first. A new workflow will then be created from the same saved AOI and dates.</p>
+        <h2 id="resubmit-title">Refresh this task?</h2>
+        <p>The current workflow will be cancelled. A new workflow will start with the exact same saved AOI and dates.</p>
         <div className="displacement-resubmit-actions">
-          <button type="button" className="demo-button" disabled={busy} onClick={() => setShowResubmitConfirmation(false)}>Keep current workflow</button>
-          <button type="button" className="investigate-button" disabled={busy} onClick={() => void confirmResubmit()}>{busy ? 'Replacing…' : 'Cancel and start new workflow'}</button>
+          <button type="button" className="demo-button" disabled={busy} onClick={() => setShowResubmitConfirmation(false)}>Keep current task</button>
+          <button type="button" className="investigate-button" disabled={busy} onClick={() => void confirmResubmit()}>{busy ? 'Refreshing…' : 'Cancel and create new task'}</button>
         </div>
       </section>}
       {jobError && <p role="alert">{jobError}</p>}
-      <p role="status" aria-live="polite">{feedback}</p>
     </section>
   </main>;
 }

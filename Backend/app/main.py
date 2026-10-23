@@ -389,13 +389,8 @@ def list_displacement_jobs(user: dict = Depends(get_current_user)) -> list[Displ
     return [_displacement_response(record) for record in records]
 
 
-@app.post("/api/displacement-jobs/{job_id}/resubmit", response_model=DisplacementJobResponse)
-def resubmit_displacement_job(
-    job_id: UUID, request: ResubmitDisplacementJobRequest, user: dict = Depends(get_current_user),
-) -> DisplacementJobResponse:
-    """Cancel one active workflow, then submit a replacement from its stored inputs."""
-    owner_uid = _required_owner_uid(user)
-    store = _require_store()
+def _cancel_active_displacement_job(owner_uid: str, job_id: UUID, store) -> dict:
+    """Cancel a GitHub run and persist cancellation before any replacement exists."""
     try:
         current = store.get_displacement_job(owner_uid, job_id)
     except PersistenceError:
@@ -424,14 +419,31 @@ def resubmit_displacement_job(
     except GitHubCancellationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
     try:
-        store.update_displacement_job(job_id, {
+        return store.update_displacement_job(job_id, {
             "state": JobState.CANCELLED.value,
             "stage": "cancelled_by_user",
             "error_code": "CANCELLED_BY_USER",
-            "error_message": "Cancelled by the account owner before a confirmed resubmission.",
+            "error_message": "Cancelled by the account owner.",
         })
     except PersistenceError:
-        raise HTTPException(status_code=503, detail="GitHub Actions was cancelled but the account job state could not be updated; no replacement was created.") from None
+        raise HTTPException(status_code=503, detail="GitHub Actions was cancelled but the account job state could not be updated.") from None
+
+
+@app.post("/api/displacement-jobs/{job_id}/cancel", response_model=DisplacementJobResponse)
+def cancel_displacement_job(job_id: UUID, user: dict = Depends(get_current_user)) -> DisplacementJobResponse:
+    """Explicit account-owner cancellation; it never creates a new workflow."""
+    owner_uid = _required_owner_uid(user)
+    return _displacement_response(_cancel_active_displacement_job(owner_uid, job_id, _require_store()))
+
+
+@app.post("/api/displacement-jobs/{job_id}/resubmit", response_model=DisplacementJobResponse)
+def resubmit_displacement_job(
+    job_id: UUID, request: ResubmitDisplacementJobRequest, user: dict = Depends(get_current_user),
+) -> DisplacementJobResponse:
+    """Cancel one active workflow, then submit a replacement from its stored inputs."""
+    owner_uid = _required_owner_uid(user)
+    store = _require_store()
+    current = _cancel_active_displacement_job(owner_uid, job_id, store)
 
     replacement = CreateDisplacementJobRequest(
         aoi_wkt=str(current["aoi_wkt"]), start_date=current["start_date"], end_date=current["end_date"],

@@ -242,6 +242,17 @@ export async function resubmitDisplacementJob(
   );
 }
 
+export async function cancelDisplacementJob(jobId: string, user: Pick<User, 'getIdToken'> | null): Promise<DisplacementJob> {
+  const safeId = jobId.trim();
+  if (!safeId) throw new Error('A displacement job ID is required.');
+  return readAuthenticatedPayload<DisplacementJob>(
+    `${API_BASE}/api/displacement-jobs/${encodeURIComponent(safeId)}/cancel`,
+    user,
+    'Could not cancel the displacement job.',
+    { method: 'POST' },
+  );
+}
+
 
 export type AoiWindowResponse = {
   service: string;
